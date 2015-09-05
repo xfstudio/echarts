@@ -2,15 +2,14 @@
  * echarts图表类：折线图
  *
  * @desc echarts基于Canvas，纯Javascript图表库，提供直观，生动，可交互，可个性化定制的数据统计图表。
- * @author Kener (@Kener-林峰, linzhifeng@baidu.com)
+ * @author Kener (@Kener-林峰, kener.linfeng@gmail.com)
  *
  */
 define(function (require) {
-    var ComponentBase = require('../component/base');
     var ChartBase = require('./base');
     
     // 图形依赖
-    var BrokenLineShape = require('zrender/shape/BrokenLine');
+    var PolylineShape = require('zrender/shape/Polyline');
     var IconShape = require('../util/shape/Icon');
     var HalfSmoothPolygonShape = require('../util/shape/HalfSmoothPolygon');
     // 组件依赖
@@ -19,6 +18,54 @@ define(function (require) {
     require('../component/dataZoom');
     
     var ecConfig = require('../config');
+    // 折线图默认参数
+    ecConfig.line = {
+        zlevel: 0,                  // 一级层叠
+        z: 2,                       // 二级层叠
+        clickable: true,
+        legendHoverLink: true,
+        // stack: null
+        xAxisIndex: 0,
+        yAxisIndex: 0,
+        // 'nearest', 'min', 'max', 'average'
+        dataFilter: 'nearest',
+        itemStyle: {
+            normal: {
+                // color: 各异,
+                label: {
+                    show: false
+                    // formatter: 标签文本格式器，同Tooltip.formatter，不支持异步回调
+                    // position: 默认自适应，水平布局为'top'，垂直布局为'right'，可选为
+                    //           'inside'|'left'|'right'|'top'|'bottom'
+                    // textStyle: null      // 默认使用全局文本样式，详见TEXTSTYLE
+                },
+                lineStyle: {
+                    width: 2,
+                    type: 'solid',
+                    shadowColor: 'rgba(0,0,0,0)', //默认透明
+                    shadowBlur: 0,
+                    shadowOffsetX: 0,
+                    shadowOffsetY: 0
+                }
+            },
+            emphasis: {
+                // color: 各异,
+                label: {
+                    show: false
+                    // formatter: 标签文本格式器，同Tooltip.formatter，不支持异步回调
+                    // position: 默认自适应，水平布局为'top'，垂直布局为'right'，可选为
+                    //           'inside'|'left'|'right'|'top'|'bottom'
+                    // textStyle: null      // 默认使用全局文本样式，详见TEXTSTYLE
+                }
+            }
+        },
+        // smooth: false,
+        // symbol: null,         // 拐点图形类型
+        symbolSize: 2,           // 拐点图形大小
+        // symbolRotate: null,   // 拐点图形旋转控制
+        showAllSymbol: false     // 标志图形默认只有主轴显示（随主轴标签间隔隐藏策略）
+    };
+
     var ecData = require('../util/ecData');
     var zrUtil = require('zrender/tool/util');
     var zrColor = require('zrender/tool/color');
@@ -31,10 +78,8 @@ define(function (require) {
      * @param {Object} component 组件
      */
     function Line(ecTheme, messageCenter, zr, option, myChart){
-        // 基类
-        ComponentBase.call(this, ecTheme, messageCenter, zr, option, myChart);
         // 图表基类
-        ChartBase.call(this);
+        ChartBase.call(this, ecTheme, messageCenter, zr, option, myChart);
 
         this.refresh(option);
     }
@@ -46,7 +91,7 @@ define(function (require) {
          */
         _buildShape: function () {
             this.finalPLMap = {}; // 完成的point list(PL)
-            this._bulidPosition();
+            this._buildPosition();
         },
 
         /**
@@ -57,9 +102,7 @@ define(function (require) {
             // 确定类目轴和数值轴，同一方向随便找一个即可
             var seriesIndex = locationMap[0][0];
             var serie = series[seriesIndex];
-            var xAxisIndex = serie.xAxisIndex;
-            var categoryAxis = this.component.xAxis.getAxis(xAxisIndex);
-            var yAxisIndex; // 数值轴各异
+            var categoryAxis = this.component.xAxis.getAxis(serie.xAxisIndex || 0);
             var valueAxis;  // 数值轴各异
 
             var x;
@@ -80,18 +123,15 @@ define(function (require) {
                 x = categoryAxis.getCoordByIndex(i);
                 for (var j = 0, k = locationMap.length; j < k; j++) {
                     // 堆积数据用第一条valueAxis
-                    yAxisIndex = series[locationMap[j][0]].yAxisIndex || 0;
-                    valueAxis = this.component.yAxis.getAxis(yAxisIndex);
+                    valueAxis = this.component.yAxis.getAxis(
+                        series[locationMap[j][0]].yAxisIndex || 0
+                    );
                     baseYP = lastYP = baseYN = lastYN = valueAxis.getCoord(0);
                     for (var m = 0, n = locationMap[j].length; m < n; m++) {
                         seriesIndex = locationMap[j][m];
                         serie = series[seriesIndex];
                         data = serie.data[i];
-                        value = data != null
-                                ? (data.value != null
-                                  ? data.value
-                                  : data)
-                                : '-';
+                        value = this.getDataFromOption(data, '-');
                         curPLMap[seriesIndex] = curPLMap[seriesIndex] || [];
                         xMarkMap[seriesIndex] = xMarkMap[seriesIndex] 
                                                 || {
@@ -156,11 +196,7 @@ define(function (require) {
                         seriesIndex = locationMap[j][m];
                         serie = series[seriesIndex];
                         data = serie.data[i];
-                        value = data != null
-                                ? (data.value != null
-                                  ? data.value
-                                  : data)
-                                : '-';
+                        value = this.getDataFromOption(data, '-');
                         if (value != '-') {
                             // 只关心空数据
                             continue;
@@ -203,9 +239,7 @@ define(function (require) {
             // 确定类目轴和数值轴，同一方向随便找一个即可
             var seriesIndex = locationMap[0][0];
             var serie = series[seriesIndex];
-            var yAxisIndex = serie.yAxisIndex;
-            var categoryAxis = this.component.yAxis.getAxis(yAxisIndex);
-            var xAxisIndex; // 数值轴各异
+            var categoryAxis = this.component.yAxis.getAxis(serie.yAxisIndex || 0);
             var valueAxis;  // 数值轴各异
 
             var x;
@@ -226,18 +260,15 @@ define(function (require) {
                 y = categoryAxis.getCoordByIndex(i);
                 for (var j = 0, k = locationMap.length; j < k; j++) {
                     // 堆积数据用第一条valueAxis
-                    xAxisIndex = series[locationMap[j][0]].xAxisIndex || 0;
-                    valueAxis = this.component.xAxis.getAxis(xAxisIndex);
+                    valueAxis = this.component.xAxis.getAxis(
+                        series[locationMap[j][0]].xAxisIndex || 0
+                    );
                     baseXP = lastXP = baseXN = lastXN = valueAxis.getCoord(0);
                     for (var m = 0, n = locationMap[j].length; m < n; m++) {
                         seriesIndex = locationMap[j][m];
                         serie = series[seriesIndex];
                         data = serie.data[i];
-                        value = data != null
-                                ? (data.value != null
-                                  ? data.value
-                                  : data)
-                                : '-';
+                        value = this.getDataFromOption(data, '-');
                         curPLMap[seriesIndex] = curPLMap[seriesIndex] || [];
                         xMarkMap[seriesIndex] = xMarkMap[seriesIndex] 
                                                 || {
@@ -302,11 +333,7 @@ define(function (require) {
                         seriesIndex = locationMap[j][m];
                         serie = series[seriesIndex];
                         data = serie.data[i];
-                        value = data != null
-                                ? (data.value != null
-                                  ? data.value
-                                  : data)
-                                : '-';
+                        value = this.getDataFromOption(data, '-');
                         if (value != '-') {
                             // 只关心空数据
                             continue;
@@ -347,17 +374,14 @@ define(function (require) {
         _buildOther: function(seriesArray, maxDataLength, locationMap, xMarkMap) {
             var series = this.series;
             var curPLMap = {};   // 正在记录的point list(PL)
-            
             var xAxis;
-            var yAxis;
+            
             for (var j = 0, k = locationMap.length; j < k; j++) {
                 for (var m = 0, n = locationMap[j].length; m < n; m++) {
                     var seriesIndex = locationMap[j][m];
                     var serie = series[seriesIndex];
-                    var xAxisIndex = serie.xAxisIndex || 0;
-                    xAxis = this.component.xAxis.getAxis(xAxisIndex);
-                    var yAxisIndex = serie.yAxisIndex || 0;
-                    yAxis = this.component.yAxis.getAxis(yAxisIndex);
+                    xAxis = this.component.xAxis.getAxis(serie.xAxisIndex || 0);
+                    var yAxis = this.component.yAxis.getAxis(serie.yAxisIndex || 0);
                     var baseY = yAxis.getCoord(0);
                     
                     curPLMap[seriesIndex] = curPLMap[seriesIndex] || [];
@@ -377,11 +401,7 @@ define(function (require) {
                     
                     for (var i = 0, l = serie.data.length; i < l; i++) {
                         var data = serie.data[i];
-                        var value = data != null
-                                    ? (data.value != null
-                                      ? data.value
-                                      : data)
-                                    : '-';
+                        var value = this.getDataFromOption(data, '-');
                         if (!(value instanceof Array)) {
                             continue;
                         }
@@ -433,13 +453,14 @@ define(function (require) {
             
             this._calculMarkMapXY(xMarkMap, locationMap, 'xy');
             
-            this._buildBorkenLine(seriesArray, this.finalPLMap, xAxis, 'horizontal');
+            this._buildBorkenLine(seriesArray, this.finalPLMap, xAxis, 'other');
         },
         
         /**
          * 生成折线和折线上的拐点
          */
-        _buildBorkenLine: function (seriesArray, pointList, categoryAxis, orient) {
+        _buildBorkenLine: function (seriesArray, pointList, categoryAxis, curOrient) {
+            var orient = curOrient == 'other' ? 'horizontal' : curOrient;
             var series = this.series;
             var data;
             
@@ -473,13 +494,13 @@ define(function (require) {
 
                     for (var i = 0, l = seriesPL.length; i < l; i++) {
                         var singlePL = seriesPL[i];
-                        var isLarge = this._isLarge(orient, singlePL);
+                        var isLarge = curOrient != 'other' && this._isLarge(orient, singlePL);
                         if (!isLarge) { // 非大数据模式才显示拐点symbol
                             for (var j = 0, k = singlePL.length; j < k; j++) {
                                 data = serie.data[singlePL[j][2]];
                                 if (this.deepQuery([data, serie, this.option], 'calculable') // 可计算
-                                    || this.deepQuery([data, serie], 'showAllSymbol')       // 全显示
-                                    || (categoryAxis.type === 'category'                   // 主轴非空
+                                    || this.deepQuery([data, serie], 'showAllSymbol')        // 全显示
+                                    || (categoryAxis.type === 'categoryAxis'                 // 主轴非空
                                         && categoryAxis.isMainAxis(singlePL[j][2])
                                         && this.deepQuery([data, serie], 'symbol') != 'none'
                                        )
@@ -497,12 +518,15 @@ define(function (require) {
                         }
                         else {
                             // 大数据模式截取pointList
-                            singlePL = this._getLargePointList(orient, singlePL);
+                            singlePL = this._getLargePointList(
+                                orient, singlePL, serie.dataFilter
+                            );
                         }
-                        
+
                         // 折线图
-                        var brokenLineShape = new BrokenLineShape({
-                            zlevel: this._zlevelBase,
+                        var polylineShape = new PolylineShape({
+                            zlevel: serie.zlevel,
+                            z: serie.z,
                             style: {
                                 miterLimit: lineWidth,
                                 pointList: singlePL,
@@ -537,16 +561,17 @@ define(function (require) {
                         });
                         
                         ecData.pack(
-                            brokenLineShape,
+                            polylineShape,
                             series[seriesIndex], seriesIndex,
                             0, i, series[seriesIndex].name
                         );
                         
-                        this.shapeList.push(brokenLineShape);
+                        this.shapeList.push(polylineShape);
                         
                         if (isFill) {
                             var halfSmoothPolygonShape = new HalfSmoothPolygonShape({
-                                zlevel: this._zlevelBase,
+                                zlevel: serie.zlevel,
+                                z: serie.z,
                                 style: {
                                     miterLimit: lineWidth,
                                     pointList: zrUtil.clone(singlePL).concat([
@@ -626,7 +651,7 @@ define(function (require) {
         /**
          * 大规模pointList优化 
          */
-        _getLargePointList: function(orient, singlePL) {
+        _getLargePointList: function(orient, singlePL, filter) {
             var total;
             if (orient === 'horizontal') {
                 total = this.component.grid.getWidth();
@@ -637,12 +662,75 @@ define(function (require) {
             
             var len = singlePL.length;
             var newList = [];
+
+            if (typeof(filter) != 'function') {
+                switch (filter) {
+                    case 'min':
+                        filter = function (arr) {
+                            return Math.max.apply(null, arr);
+                        };
+                        break;
+                    case 'max':
+                        filter = function (arr) {
+                            return Math.min.apply(null, arr);
+                        };
+                        break;
+                    case 'average':
+                        filter = function (arr) {
+                            var total = 0;
+                            for (var i = 0; i < arr.length; i++) {
+                                total += arr[i];
+                            }
+                            return total / arr.length;
+                        };
+                        break;
+                    default:
+                        filter = function (arr) {
+                            return arr[0];
+                        }
+                }
+            }
+
+            var windowData = [];
             for (var i = 0; i < total; i++) {
-                newList[i] = singlePL[Math.floor(len / total * i)];
+                var idx0 = Math.floor(len / total * i);
+                var idx1 = Math.min(Math.floor(len / total * (i + 1)), len);
+                if (idx1 <= idx0) {
+                    continue;
+                }
+
+                for (var j = idx0; j < idx1; j++) {
+                    windowData[j - idx0] = orient === 'horizontal'
+                        ? singlePL[j][1] : singlePL[j][0];
+                }
+
+                windowData.length = idx1 - idx0;
+                var filteredVal = filter(windowData);
+                var nearestIdx = -1;
+                var minDist = Infinity;
+                // 寻找值最相似的点，使用其其它属性
+                for (var j = idx0; j < idx1; j++) {
+                    var val = orient === 'horizontal'
+                        ? singlePL[j][1] : singlePL[j][0];
+                    var dist = Math.abs(val - filteredVal);
+                    if (dist < minDist) {
+                        nearestIdx = j;
+                        minDist = dist;
+                    }
+                }
+
+                var newItem = singlePL[nearestIdx].slice();
+                if (orient === 'horizontal') {
+                    newItem[1] = filteredVal;
+                }
+                else {
+                    newItem[0] = filteredVal;
+                }
+                newList.push(newItem);
             }
             return newList;
         },
-        
+
         _getSmooth: function (isSmooth/*, pointList, orient*/) {
             if (isSmooth) {
                 /* 不科学啊，发现0.3通用了
@@ -667,7 +755,8 @@ define(function (require) {
         _getCalculableItem: function (seriesIndex, dataIndex, name, x, y, orient) {
             var series = this.series;
             var color = series[seriesIndex].calculableHolderColor
-                        || this.ecTheme.calculableHolderColor;
+                        || this.ecTheme.calculableHolderColor
+                        || ecConfig.calculableHolderColor;
 
             var itemShape = this._getSymbol(
                 seriesIndex, dataIndex, name,
@@ -699,7 +788,8 @@ define(function (require) {
                 '#fff',
                 orient === 'vertical' ? 'horizontal' : 'vertical' // 翻转
             );
-            itemShape.zlevel = this._zlevelBase + 1;
+            itemShape.zlevel = serie.zlevel;
+            itemShape.z = serie.z + 1;
             
             if (this.deepQuery([data, serie, this.option], 'calculable')) {
                 this.setCalculable(itemShape);
@@ -787,7 +877,7 @@ define(function (require) {
         /**
          * 动态数据增加动画 
          */
-        addDataAnimation: function (params) {
+        addDataAnimation: function (params, done) {
             var series = this.series;
             var aniMap = {}; // seriesIndex索引参数
             for (var i = 0, l = params.length; i < l; i++) {
@@ -800,6 +890,19 @@ define(function (require) {
             var seriesIndex;
             var pointList;
             var isHorizontal; // 是否横向布局， isHorizontal;
+
+            var aniCount = 0;
+            function animationDone() {
+                aniCount--;
+                if (aniCount === 0) {
+                    done && done();
+                }
+            }
+            function animationDuring(target) {
+                // 强制更新曲线控制点
+                target.style.controlPointList = null;
+            }
+
             for (var i = this.shapeList.length - 1; i >= 0; i--) {
                 seriesIndex = this.shapeList[i]._seriesIndex;
                 if (aniMap[seriesIndex] && !aniMap[seriesIndex][3]) {
@@ -837,16 +940,9 @@ define(function (require) {
                             }
                             isHorizontal ? (x = -dx, y = 0) : (x = 0, y = dy);
                         }
+                        this.shapeList[i].style.controlPointList = null;
                         
-                        this.zr.modShape(
-                            this.shapeList[i].id, 
-                            {
-                                style: {
-                                    pointList: this.shapeList[i].style.pointList
-                                }
-                            },
-                            true
-                        );
+                        this.zr.modShape(this.shapeList[i]);
                     }
                     else {
                         // 拐点动画
@@ -867,18 +963,27 @@ define(function (require) {
                         }
                     }
                     this.shapeList[i].position = [0, 0];
+
+                    aniCount++;
                     this.zr.animate(this.shapeList[i].id, '')
                         .when(
-                            500,
+                            this.query(this.option, 'animationDurationUpdate'),
                             { position: [ x, y ] }
                         )
+                        .during(animationDuring)
+                        .done(animationDone)
                         .start();
                 }
+            }
+
+            // 没有动画
+            if (!aniCount) {
+                done && done();
             }
         }
     };
 
-    function legendLineIcon(ctx, style) {
+    function legendLineIcon(ctx, style, refreshNextFrame) {
         var x = style.x;
         var y = style.y;
         var width = style.width;
@@ -920,15 +1025,22 @@ define(function (require) {
             ctx.lineTo(x2 + 5, y2 + dy);
             ctx.moveTo(x2 + style.width - 5, y2 + dy);
             ctx.lineTo(x2 + style.width, y2 + dy);
-            
-            symbol(ctx, {
-                x: x + 4,
-                y: y + 4,
-                width: width - 8,
-                height: height - 8,
-                n: dy,
-                image: imageLocation
-            });
+            var self = this;
+            symbol(
+                ctx,
+                {
+                    x: x + 4,
+                    y: y + 4,
+                    width: width - 8,
+                    height: height - 8,
+                    n: dy,
+                    image: imageLocation
+                },
+                function () {
+                    self.modSelf();
+                    refreshNextFrame();
+                }
+            );
         }
         else {
             ctx.moveTo(x, y + dy);
@@ -938,7 +1050,6 @@ define(function (require) {
     IconShape.prototype.iconLibrary['legendLineIcon'] = legendLineIcon;
     
     zrUtil.inherits(Line, ChartBase);
-    zrUtil.inherits(Line, ComponentBase);
     
     // 图表注册
     require('../chart').define('line', Line);

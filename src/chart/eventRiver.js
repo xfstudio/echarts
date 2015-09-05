@@ -2,11 +2,10 @@
  * echarts图表类：事件河流图
  *
  * @desc echarts基于Canvas，纯Javascript图表库，提供直观，生动，可交互，可个性化定制的数据统计图表。
- * @author clmtulip  (车丽美, chelimei@baidu.com)
+ * @author clmtulip  (车丽美, clmtulip@gmail.com)
  *
  */
 define(function (require) {
-    var ComponentBase = require('../component/base');
     var ChartBase = require('./base');
 
     var eventRiverLayout = require('../layout/eventRiver');
@@ -20,6 +19,35 @@ define(function (require) {
     require('../component/dataZoom');
 
     var ecConfig = require('../config');
+    // 事件河流图默认参数
+    ecConfig.eventRiver = {
+        zlevel: 0,                  // 一级层叠
+        z: 2,                       // 二级层叠
+        clickable: true,
+        legendHoverLink: true,
+        itemStyle: {
+            normal: {
+                // color: 各异,
+                borderColor: 'rgba(0,0,0,0)',
+                borderWidth: 1,
+                label: {
+                    show: true,
+                    position: 'inside',     // 可选为'left'|'right'|'top'|'bottom'
+                    formatter: '{b}'
+                    // textStyle: null      // 默认使用全局文本样式，详见TEXTSTYLE
+                }
+            },
+            emphasis: {
+                // color: 各异,
+                borderColor: 'rgba(0,0,0,0)',
+                borderWidth: 1,
+                label: {
+                    show: true
+                }
+            }
+        }
+    };
+    
     var ecData = require('../util/ecData');
     var ecDate = require('../util/date');
     var zrUtil = require('zrender/tool/util');
@@ -33,10 +61,8 @@ define(function (require) {
      * @param {Object} component 组件
      */
      function EventRiver(ecTheme, messageCenter, zr, option, myChart) {
-         // 基类
-         ComponentBase.call(this, ecTheme, messageCenter, zr, option, myChart);
-         // 图表基类
-         ChartBase.call(this);
+        // 图表基类
+        ChartBase.call(this, ecTheme, messageCenter, zr, option, myChart);
          
          var self = this;
          self._ondragend = function () {
@@ -75,6 +101,7 @@ define(function (require) {
              
              eventRiverLayout(
                  eventRiverSeries,
+                 this._intervalX,
                  this.component.grid.getArea()
              );
              
@@ -95,19 +122,21 @@ define(function (require) {
              for (var i = 0, iLen = series.length; i < iLen; i++) {
                  if (series[i].type === this.type) {
                      xAxis = this.component.xAxis.getAxis(series[i].xAxisIndex || 0);
-                     for (var j = 0, jLen = series[i].eventList.length; j < jLen; j++) {
-                         evolutionList = series[i].eventList[j].evolution;
+                     for (var j = 0, jLen = series[i].data.length; j < jLen; j++) {
+                         evolutionList = series[i].data[j].evolution;
                          for (var k = 0, kLen = evolutionList.length; k < kLen; k++) {
                              evolutionList[k].timeScale = xAxis.getCoord(
                                  ecDate.getNewDate(evolutionList[k].time) - 0
                              );
-                             evolutionList[k].valueScale = evolutionList[k].value;
+                             // evolutionList[k].valueScale = evolutionList[k].value;
+                             // modified by limei.che, to normalize the value range
+                             evolutionList[k].valueScale = Math.pow(evolutionList[k].value, 0.8);
                          }
                      }
                  }
              }
              // 尾迹长度
-             this._intervalX = Math.round(this.component.grid.getWidth() / 15);
+             this._intervalX = Math.round(this.component.grid.getWidth() / 40);
          },
 
          /**
@@ -118,8 +147,8 @@ define(function (require) {
              for (var i = 0; i < series.length; i++) {
                  var serieName = series[i].name || '';
                  if (series[i].type === this.type && this.selectedMap[serieName]) {
-                     for (var j = 0; j < series[i].eventList.length; j++) {
-                         this._drawEventBubble(series[i].eventList[j], i, j);
+                     for (var j = 0; j < series[i].data.length; j++) {
+                         this._drawEventBubble(series[i].data[j], i, j);
                      }
                  }
              }
@@ -132,7 +161,7 @@ define(function (require) {
              var series = this.series;
              var serie = series[seriesIndex];
              var serieName = serie.name || '';
-             var data = serie.eventList[dataIndex];
+             var data = serie.data[dataIndex];
              var queryTarget = [data, serie];
 
              var legend = this.component.legend;
@@ -155,7 +184,8 @@ define(function (require) {
              var pts = this._calculateControlPoints(oneEvent);
              
              var eventBubbleShape = {
-                 zlevel: this._zlevelBase,
+                 zlevel: serie.zlevel,
+                 z: serie.z,
                  clickable: this.deepQuery(queryTarget, 'clickable'),
                  style: {
                      pointList: pts,
@@ -181,8 +211,8 @@ define(function (require) {
              ecData.pack(
                  eventBubbleShape,
                  series[seriesIndex], seriesIndex,
-                 series[seriesIndex].eventList[dataIndex], dataIndex,
-                 series[seriesIndex].eventList[dataIndex].name
+                 series[seriesIndex].data[dataIndex], dataIndex,
+                 series[seriesIndex].data[dataIndex].name
              );
              this.shapeList.push(eventBubbleShape);
          },
@@ -262,11 +292,9 @@ define(function (require) {
             this.backupShapeList();
             this._buildShape();
          }
-
      };
 
      zrUtil.inherits(EventRiver, ChartBase);
-     zrUtil.inherits(EventRiver, ComponentBase);
 
      // 图表注册
      require('../chart').define('eventRiver', EventRiver);

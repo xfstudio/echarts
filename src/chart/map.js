@@ -2,13 +2,12 @@
  * echarts图表类：地图
  *
  * @desc echarts基于Canvas，纯Javascript图表库，提供直观，生动，可交互，可个性化定制的数据统计图表。
- * @author Kener (@Kener-林峰, linzhifeng@baidu.com)
+ * @author Kener (@Kener-林峰, kener.linfeng@gmail.com)
  *
  */
 define(function (require) {
-    var ComponentBase = require('../component/base');
     var ChartBase = require('./base');
-    
+
     // 图形依赖
     var TextShape = require('zrender/shape/Text');
     var PathShape = require('zrender/shape/Path');
@@ -17,20 +16,75 @@ define(function (require) {
     var LineShape = require('zrender/shape/Line');
     var PolygonShape = require('zrender/shape/Polygon');
     var EllipseShape = require('zrender/shape/Ellipse');
+    var ZrImage = require('zrender/shape/Image');
     // 组件依赖
     require('../component/dataRange');
     require('../component/roamController');
-    
+    var HeatmapLayer = require('../layer/heatmap');
+
     var ecConfig = require('../config');
+    // 地图默认参数
+    ecConfig.map = {
+        zlevel: 0,                  // 一级层叠
+        z: 2,                       // 二级层叠
+        mapType: 'china',   // 各省的mapType暂时都用中文
+        //mapLocation: {
+            // x: 'center' | 'left' | 'right' | 'x%' | {number},
+            // y: 'center' | 'top' | 'bottom' | 'x%' | {number}
+            // width    // 自适应
+            // height   // 自适应
+        //},
+        // mapValueCalculation: 'sum',  // 数值合并方式，默认加和，可选为：
+                                        // 'sum' | 'average' | 'max' | 'min'
+        // mapValuePrecision: 0,           // 地图数值计算结果小数精度
+        showLegendSymbol: true,         // 显示图例颜色标识（系列标识的小圆点），存在legend时生效
+        // selectedMode: false,         // 选择模式，默认关闭，可选single，multiple
+        dataRangeHoverLink: true,
+        hoverable: true,
+        clickable: true,
+        // roam: false,                 // 是否开启缩放及漫游模式
+        // scaleLimit: null,
+        itemStyle: {
+            normal: {
+                // color: 各异,
+                borderColor: 'rgba(0,0,0,0)',
+                borderWidth: 1,
+                areaStyle: {
+                    color: '#ccc'
+                },
+                label: {
+                    show: false,
+                    textStyle: {
+                        color: 'rgb(139,69,19)'
+                    }
+                }
+            },
+            emphasis: {                 // 也是选中样式
+                // color: 各异,
+                borderColor: 'rgba(0,0,0,0)',
+                borderWidth: 1,
+                areaStyle: {
+                    color: 'rgba(255,215,0,0.8)'
+                },
+                label: {
+                    show: false,
+                    textStyle: {
+                        color: 'rgb(100,0,0)'
+                    }
+                }
+            }
+        }
+    };
+
     var ecData = require('../util/ecData');
     var zrUtil = require('zrender/tool/util');
     var zrConfig = require('zrender/config');
     var zrEvent = require('zrender/tool/event');
-    
+
     var _mapParams = require('../util/mapData/params').params;
     var _textFixed = require('../util/mapData/textFixed');
     var _geoCoord = require('../util/mapData/geoCoord');
-    
+
     /**
      * 构造函数
      * @param {Object} messageCenter echart消息中心
@@ -39,11 +93,9 @@ define(function (require) {
      * @param {Object} component 组件
      */
     function Map(ecTheme, messageCenter, zr, option, myChart){
-        // 基类
-        ComponentBase.call(this, ecTheme, messageCenter, zr, option, myChart);
         // 图表基类
-        ChartBase.call(this);
-        
+        ChartBase.call(this, ecTheme, messageCenter, zr, option, myChart);
+
         var self = this;
         self._onmousewheel = function(params) {
             return self.__onmousewheel(params);
@@ -63,7 +115,7 @@ define(function (require) {
         self._ondrhoverlink = function(params) {
             return self.__ondrhoverlink(params);
         };
-        
+
         this._isAlive = true;           // 活着标记
         this._selectedMode = {};        // 选择模式
         this._activeMapType = {};       // 当前活跃的地图类型
@@ -79,7 +131,7 @@ define(function (require) {
         this._mapDataRequireCounter;    // 异步回调计数器
         this._markAnimation = false;
         this._hoverLinkMap = {};
-        
+
         // 漫游相关信息
         this._roamMap = {};
         this._scaleLimitMap = {};
@@ -88,15 +140,15 @@ define(function (require) {
         this._mousedown;
         this._justMove;   // 避免移动响应点击
         this._curMapType; // 当前移动的地图类型
-        
+
         this.refresh(option);
-        
+
         this.zr.on(zrConfig.EVENT.MOUSEWHEEL, this._onmousewheel);
         this.zr.on(zrConfig.EVENT.MOUSEDOWN, this._onmousedown);
         messageCenter.bind(ecConfig.EVENT.ROAMCONTROLLER, this._onroamcontroller);
         messageCenter.bind(ecConfig.EVENT.DATA_RANGE_HOVERLINK, this._ondrhoverlink);
     }
-    
+
     Map.prototype = {
         type : ecConfig.CHART_TYPE_MAP,
         /**
@@ -106,7 +158,7 @@ define(function (require) {
             var series = this.series;
             this.selectedMap = {}; // 系列
             this._activeMapType = {}; // 当前活跃的地图类型
-            
+
             var legend = this.component.legend;
             var seriesName;
             var valueData = {};
@@ -125,14 +177,16 @@ define(function (require) {
                     mapValuePrecision[mapType] = mapValuePrecision[mapType]
                                                  || series[i].mapValuePrecision;
                     this._scaleLimitMap[mapType] = this._scaleLimitMap[mapType] || {};
-                    series[i].scaleLimit 
+                    series[i].scaleLimit
                         && zrUtil.merge(this._scaleLimitMap[mapType], series[i].scaleLimit, true);
-                    
+
                     this._roamMap[mapType] = series[i].roam || this._roamMap[mapType];
-                    
-                    this._hoverLinkMap[mapType] = series[i].dataRangeHoverLink
-                                                  || this._hoverLinkMap[mapType];
-                    
+
+                    if (this._hoverLinkMap[mapType] == null || this._hoverLinkMap[mapType]) {
+                        // false 1票否决
+                        this._hoverLinkMap[mapType] = series[i].dataRangeHoverLink;
+                    }
+
                     this._nameMap[mapType] = this._nameMap[mapType] || {};
                     series[i].nameMap
                         && zrUtil.merge(this._nameMap[mapType], series[i].nameMap, true);
@@ -148,27 +202,27 @@ define(function (require) {
                             _geoCoord, series[i].geoCoord, true
                         );
                     }
-                    
-                    this._selectedMode[mapType] = this._selectedMode[mapType] 
+
+                    this._selectedMode[mapType] = this._selectedMode[mapType]
                                                   || series[i].selectedMode;
                     if (this._hoverable[mapType] == null || this._hoverable[mapType]) {
                         // false 1票否决
-                        this._hoverable[mapType] = series[i].hoverable; 
+                        this._hoverable[mapType] = series[i].hoverable;
                     }
                     if (this._clickable[mapType] == null || this._clickable[mapType]) {
                         // false 1票否决
-                        this._clickable[mapType] = series[i].clickable; 
+                        this._clickable[mapType] = series[i].clickable;
                     }
-                    if (this._showLegendSymbol[mapType] == null 
+                    if (this._showLegendSymbol[mapType] == null
                         || this._showLegendSymbol[mapType]
                     ) {
                         // false 1票否决
                         this._showLegendSymbol[mapType] = series[i].showLegendSymbol;
                     }
-                    
-                    valueCalculation[mapType] = valueCalculation[mapType] 
+
+                    valueCalculation[mapType] = valueCalculation[mapType]
                                                 || series[i].mapValueCalculation;
-                    
+
                     seriesName = series[i].name;
                     this.selectedMap[seriesName] = legend
                         ? legend.isSelected(seriesName)
@@ -178,18 +232,30 @@ define(function (require) {
                         data = series[i].data;
                         for (var j = 0, k = data.length; j < k; j++) {
                             name = this._nameChange(mapType, data[j].name);
-                            valueData[mapType][name] = valueData[mapType][name] 
-                                                       || {seriesIndex : []};
+                            valueData[mapType][name] = valueData[mapType][name]
+                                                       || {
+                                                           seriesIndex : [],
+                                                           valueMap: {},
+                                                           precision: 0
+                                                       };
                             for (var key in data[j]) {
                                 if (key != 'value') {
-                                    valueData[mapType][name][key] = 
+                                    valueData[mapType][name][key] =
                                         data[j][key];
                                 }
                                 else if (!isNaN(data[j].value)) {
+                                    // value
                                     valueData[mapType][name].value == null
                                     && (valueData[mapType][name].value = 0);
-                                    
-                                    valueData[mapType][name].value +=  data[j].value;
+
+                                    valueData[mapType][name].precision = 
+                                        Math.max(
+                                            this.getPrecision(+data[j].value),
+                                            valueData[mapType][name].precision
+                                        );
+
+                                    valueData[mapType][name].value += (+data[j].value);
+                                    valueData[mapType][name].valueMap[i] = +data[j].value;
                                 }
                             }
                             //索引有该区域的系列样式
@@ -198,7 +264,7 @@ define(function (require) {
                     }
                 }
             }
-            
+
             this._mapDataRequireCounter = 0;
             for (var mt in valueData) {
                 this._mapDataRequireCounter++;
@@ -211,18 +277,21 @@ define(function (require) {
                 this.lastShapeList = [];
             }
             for (var mt in valueData) {
-                if (valueCalculation[mt] && valueCalculation[mt] == 'average') {
-                    for (var k in valueData[mt]) {
-                        valueData[mt][k].value = 
-                            (valueData[mt][k].value / valueData[mt][k].seriesIndex.length)
-                            .toFixed(
-                                mapValuePrecision[mt]
-                            ) - 0;
+                for (var k in valueData[mt]) {
+                    if (valueCalculation[mt] == 'average') {
+                        valueData[mt][k].value /= valueData[mt][k].seriesIndex.length;
+                    }
+                    var value = valueData[mt][k].value;
+                    if (value != null) {
+                        valueData[mt][k].value = value.toFixed(
+                            mapValuePrecision[mt] == null
+                                ? valueData[mt][k].precision : mapValuePrecision[mt]
+                        ) - 0;   
                     }
                 }
-                
+
                 this._mapDataMap[mt] = this._mapDataMap[mt] || {};
-                
+
                 if (this._mapDataMap[mt].mapData) {
                     // 已经缓存了则直接用
                     this._mapDataCallback(mt, valueData[mt], mapSeries[mt])(
@@ -231,7 +300,7 @@ define(function (require) {
                 }
                 else if (_mapParams[mt.replace(/\|.*/, '')].getGeoJson) {
                     // 特殊区域
-                    this._specialArea[mt] = 
+                    this._specialArea[mt] =
                         _mapParams[mt.replace(/\|.*/, '')].specialArea
                         || this._specialArea[mt];
                     _mapParams[mt.replace(/\|.*/, '')].getGeoJson(
@@ -240,7 +309,7 @@ define(function (require) {
                 }
             }
         },
-        
+
         /**
          * @param {string} mt mapType
          * @parma {Object} vd valueData
@@ -259,7 +328,7 @@ define(function (require) {
                     md = self._getSubMapData(mt, md);
                 }
                 self._mapDataMap[mt].mapData = md;
-                
+
                 if (md.firstChild) {
                     self._mapDataMap[mt].rate = 1;
                     self._mapDataMap[mt].projection = require('../util/projection/svg');
@@ -268,7 +337,7 @@ define(function (require) {
                     self._mapDataMap[mt].rate = 0.75;
                     self._mapDataMap[mt].projection = require('../util/projection/normal');
                 }
-                
+
                 self._buildMap(
                     mt,                             // 类型
                     self._getProjectionData(mt, md, ms),      // 地图数据
@@ -278,11 +347,13 @@ define(function (require) {
                 self._buildMark(mt, ms);
                 if (--self._mapDataRequireCounter <= 0) {
                     self.addShapeList();
-                    self.zr.refresh();
+                    self.zr.refreshNextFrame();
                 }
+
+                self._buildHeatmap(mt);
             };
         },
-        
+
         _clearSelected : function() {
             for (var k in this._selected) {
                 if (!this._activeMapType[this._mapTypeMap[k]]) {
@@ -291,12 +362,12 @@ define(function (require) {
                 }
             }
         },
-        
+
         _getSubMapData : function (mapType, mapData) {
             var subType = mapType.replace(/^.*\|/, '');
             var features = mapData.features;
             for (var i = 0, l = features.length; i < l; i++) {
-                if (features[i].properties 
+                if (features[i].properties
                     && features[i].properties.name == subType
                 ) {
                     features = features[i];
@@ -324,21 +395,21 @@ define(function (require) {
                 ]
             };
         },
-        
+
         /**
-         * 按需加载相关地图 
+         * 按需加载相关地图
          */
         _getProjectionData : function (mapType, mapData, mapSeries) {
             var normalProjection = this._mapDataMap[mapType].projection;
             var province = [];
-            
+
             // bbox永远不变
-            var bbox = this._mapDataMap[mapType].bbox 
+            var bbox = this._mapDataMap[mapType].bbox
                        || normalProjection.getBbox(
                               mapData, this._specialArea[mapType]
                           );
             //console.log(bbox)
-            
+
             var transform;
             //console.log(1111,transform)
             if (!this._mapDataMap[mapType].hasRoam) {
@@ -354,9 +425,9 @@ define(function (require) {
                 transform = this._mapDataMap[mapType].transform;
             }
             //console.log(bbox,transform)
-            var lastTransform = this._mapDataMap[mapType].lastTransform 
+            var lastTransform = this._mapDataMap[mapType].lastTransform
                                 || {scale:{}};
-            
+
             var pathArray;
             if (transform.left != lastTransform.left
                 || transform.top != lastTransform.top
@@ -375,12 +446,12 @@ define(function (require) {
                 transform = this._mapDataMap[mapType].transform;
                 pathArray = this._mapDataMap[mapType].pathArray;
             }
-            
+
             this._mapDataMap[mapType].bbox = bbox;
             this._mapDataMap[mapType].transform = transform;
             this._mapDataMap[mapType].lastTransform = lastTransform;
             this._mapDataMap[mapType].pathArray = pathArray;
-            
+
             //console.log(pathArray)
             var position = [transform.left, transform.top];
             for (var i = 0, l = pathArray.length; i < l; i++) {
@@ -398,28 +469,28 @@ define(function (require) {
                     mapType, pathArray[i], position
                 ));
             }
-            
+
             if (this._specialArea[mapType]) {
                 for (var area in this._specialArea[mapType]) {
                     province.push(this._getSpecialProjectionData(
-                        mapType, mapData, 
-                        area, this._specialArea[mapType][area], 
+                        mapType, mapData,
+                        area, this._specialArea[mapType][area],
                         position
                     ));
                 }
-                
+
             }
-            
+
             // 中国地图加入南海诸岛
             if (mapType == 'china') {
                 var leftTop = this.geo2pos(
-                    mapType, 
+                    mapType,
                     _geoCoord['南海诸岛'] || _mapParams['南海诸岛'].textCoord
                 );
                 // scale.x : width  = 10.51 : 64
                 var scale = transform.scale.x / 10.5;
                 var textPosition = [
-                    32 * scale + leftTop[0], 
+                    32 * scale + leftTop[0],
                     83 * scale + leftTop[1]
                 ];
                 if (_textFixed['南海诸岛']) {
@@ -433,13 +504,13 @@ define(function (require) {
                     textX : textPosition[0],
                     textY : textPosition[1]
                 });
-                
+
             }
             //console.log(JSON.stringify(province));
             //console.log(JSON.stringify(this._mapDataMap[mapType].transform));
             return province;
         },
-        
+
         /**
          * 特殊地区投射数据
          */
@@ -447,19 +518,19 @@ define(function (require) {
             //console.log('_getSpecialProjectionData--------------')
             // 构造单独的geoJson地图数据
             mapData = this._getSubMapData('x|' + areaName, mapData);
-            
+
             // bbox
             var normalProjection = require('../util/projection/normal');
             var bbox = normalProjection.getBbox(mapData);
             //console.log('bbox', bbox)
-            
+
             // transform
             var leftTop = this.geo2pos(
-                mapType, 
+                mapType,
                 [mapSize.left, mapSize.top]
             );
             var rightBottom = this.geo2pos(
-                mapType, 
+                mapType,
                 [mapSize.left + mapSize.width, mapSize.top + mapSize.height]
             );
             //console.log('leftright' , leftTop, rightBottom);
@@ -489,18 +560,18 @@ define(function (require) {
                     y : yScale
                 }
             };
-            
+
             //console.log('**',areaName, transform)
             var pathArray = normalProjection.geoJson2Path(
                 mapData, transform
             );
-            
+
             //console.log(pathArray)
             return this._getSingleProvince(
                 mapType, pathArray[0], position
             );
         },
-        
+
         _getSingleProvince : function (mapType, path, position) {
             var textPosition;
             var name = path.properties.name;
@@ -508,26 +579,26 @@ define(function (require) {
             if (_geoCoord[name]) {
                 // 经纬度直接定位不加textFixed
                 textPosition = this.geo2pos(
-                    mapType, 
+                    mapType,
                     _geoCoord[name]
                 );
             }
             else if (path.cp) {
                 textPosition = [
-                    path.cp[0] + textFixed[0], 
+                    path.cp[0] + textFixed[0],
                     path.cp[1] + textFixed[1]
                 ];
             }
             else {
                 var bbox = this._mapDataMap[mapType].bbox;
                 textPosition = this.geo2pos(
-                    mapType, 
+                    mapType,
                     [bbox.left + bbox.width / 2, bbox.top + bbox.height / 2]
                 );
                 textPosition[0] += textFixed[0];
                 textPosition[1] += textFixed[1];
             }
-            
+
             //console.log(textPosition)
             path.name = this._nameChange(mapType, name);
             path.position = position;
@@ -535,9 +606,9 @@ define(function (require) {
             path.textY = textPosition[1];
             return path;
         },
-        
+
         /**
-         * 获取缩放 
+         * 获取缩放
          */
         _getTransform : function (bbox, mapSeries, rate) {
             var series = this.series;
@@ -559,7 +630,7 @@ define(function (require) {
                 width = mapLocation.width || width;
                 height = mapLocation.height || height;
             }
-            
+
             //x = isNaN(cusX) ? padding : cusX;
             x = this.parsePercent(cusX, zrWidth);
             x = isNaN(x) ? padding : x;
@@ -573,7 +644,7 @@ define(function (require) {
             height = height == null
                      ? (zrHeight - y - 2 * padding)
                      : (this.parsePercent(height, zrHeight));
-            
+
             var mapWidth = bbox.width;
             var mapHeight = bbox.height;
             //var minScale;
@@ -593,7 +664,7 @@ define(function (require) {
             //console.log(minScale)
             //width = mapWidth * minScale;
             //height = mapHeight * minScale;
-            
+
             if (isNaN(cusX)) {
                 cusX = cusX || 'center';
                 switch (cusX + '') {
@@ -636,7 +707,7 @@ define(function (require) {
                 //translate : [x + width / 2, y + height / 2]
             };
         },
-        
+
         /**
          * 构建地图
          * @param {Object} mapData 图形数据
@@ -651,15 +722,14 @@ define(function (require) {
             var data;
             var value;
             var queryTarget;
-            var defaultOption = this.ecTheme.map;
-            
+
             var color;
             var font;
             var style;
             var highlightStyle;
-            
+
             var shape;
-            var textShape; 
+            var textShape;
             for (var i = 0, l = mapData.length; i < l; i++) {
                 style = zrUtil.clone(mapData[i]);
                 highlightStyle = {
@@ -673,15 +743,17 @@ define(function (require) {
                     queryTarget = [data]; // level 3
                     seriesName = '';
                     for (var j = 0, k = data.seriesIndex.length; j < k; j++) {
+                        var serie = series[data.seriesIndex[j]];
                         // level 2
-                        queryTarget.push(series[data.seriesIndex[j]]);
-                        seriesName += series[data.seriesIndex[j]].name + ' ';
+                        queryTarget.push(serie);
+                        seriesName += serie.name + ' ';
                         if (legend
-                            && this._showLegendSymbol[mapType] 
-                            && legend.hasColor(series[data.seriesIndex[j]].name)
+                            && this._showLegendSymbol[mapType]
+                            && legend.hasColor(serie.name)
                         ) {
                             this.shapeList.push(new CircleShape({
-                                zlevel : this._zlevelBase + 1,
+                                zlevel : serie.zlevel,
+                                z : serie.z + 1,
                                 position : zrUtil.clone(style.position),
                                 _mapType : mapType,
                                 /*
@@ -694,35 +766,38 @@ define(function (require) {
                                     y : style.textY - 10,
                                     r : 3,
                                     color : legend.getColor(
-                                        series[data.seriesIndex[j]].name
+                                        serie.name
                                     )
                                 },
                                 hoverable : false
                             }));
                         }
                     }
-                    queryTarget.push(defaultOption); // level 1
                     value = data.value;
                 }
                 else {
-                    data = '-';
+                    data = {
+                        name: name,
+                        value: '-'
+                    };
                     seriesName = '';
                     queryTarget = [];
                     for (var key in mapSeries) {
                         queryTarget.push(series[key]);
                     }
-                    queryTarget.push(defaultOption);
                     value = '-';
                 }
-                
+                this.ecTheme.map && queryTarget.push(this.ecTheme.map); // level 1
+                queryTarget.push(ecConfig.map);      // level 1
+
                 // 值域控件控制
                 color = (dataRange && !isNaN(value))
                         ? dataRange.getColor(value)
                         : null;
-                
+
                 // 常规设置
-                style.color = style.color 
-                              || color 
+                style.color = style.color
+                              || color
                               || this.getItemStyleColor(
                                      this.deepQuery(queryTarget, 'itemStyle.normal.color'),
                                      data.seriesIndex, -1, data
@@ -734,33 +809,34 @@ define(function (require) {
                                     || this.deepQuery(queryTarget, 'itemStyle.normal.borderColor');
                 style.lineWidth = style.lineWidth
                                   || this.deepQuery(queryTarget, 'itemStyle.normal.borderWidth');
-                
+
                 // 高亮
                 highlightStyle.color = this.getItemStyleColor(
                                            this.deepQuery(queryTarget, 'itemStyle.emphasis.color'),
                                            data.seriesIndex, -1, data
-                                       ) 
+                                       )
                                        || this.deepQuery(
                                               queryTarget, 'itemStyle.emphasis.areaStyle.color'
-                                          ) 
+                                          )
                                        || style.color;
                 highlightStyle.strokeColor = this.deepQuery(
                                                  queryTarget, 'itemStyle.emphasis.borderColor'
-                                             ) 
+                                             )
                                              || style.strokeColor;
                 highlightStyle.lineWidth = this.deepQuery(
                                                queryTarget, 'itemStyle.emphasis.borderWidth'
                                            )
                                            || style.lineWidth;
-                
+
                 style.brushType = highlightStyle.brushType = style.brushType || 'both';
                 style.lineJoin = highlightStyle.lineJoin = 'round';
                 style._name = highlightStyle._name = name;
-                
+
                 font = this.deepQuery(queryTarget, 'itemStyle.normal.label.textStyle');
                 // 文字标签避免覆盖单独一个shape
                 textShape = {
-                    zlevel : this._zlevelBase + 1,
+                    zlevel : this.getZlevelBase(),
+                    z : this.getZBase() + 1,
                     //hoverable: this._hoverable[mapType],
                     //clickable: this._clickable[mapType],
                     position : zrUtil.clone(style.position),
@@ -785,7 +861,7 @@ define(function (require) {
                     }
                 };
                 textShape._style = zrUtil.clone(textShape.style);
-                
+
                 textShape.highlightStyle = zrUtil.clone(textShape.style);
                 if (this.deepQuery(queryTarget, 'itemStyle.emphasis.label.show')) {
                     textShape.highlightStyle.text = this.getLabelText(
@@ -806,7 +882,8 @@ define(function (require) {
                 }
 
                 shape = {
-                    zlevel : this._zlevelBase,
+                    zlevel : this.getZlevelBase(),
+                    z : this.getZBase(),
                     //hoverable: this._hoverable[mapType],
                     //clickable: this._clickable[mapType],
                     position : zrUtil.clone(style.position),
@@ -818,19 +895,19 @@ define(function (require) {
                 if (style.scale != null) {
                     shape.scale = zrUtil.clone(style.scale);
                 }
-                
+
                 textShape = new TextShape(textShape);
                 switch (shape.style.shapeType) {
-                    case 'rectangle' : 
+                    case 'rectangle' :
                         shape = new RectangleShape(shape);
                         break;
-                    case 'line' : 
+                    case 'line' :
                         shape = new LineShape(shape);
                         break;
-                    case 'circle' : 
+                    case 'circle' :
                         shape = new CircleShape(shape);
                         break;
-                    case 'polygon' : 
+                    case 'polygon' :
                         shape = new PolygonShape(shape);
                         break;
                     case 'ellipse':
@@ -843,31 +920,31 @@ define(function (require) {
                         }
                         break;
                 }
-                
+
                 if (this._selectedMode[mapType] &&
-                     this._selected[name]
-                     || (data.selected && this._selected[name] !== false) 
+                     (this._selected[name] && data.selected !== false)
+                     || data.selected === true
                 ) {
                     textShape.style = textShape.highlightStyle;
                     shape.style = shape.highlightStyle;
                 }
-                
+
                 textShape.clickable = shape.clickable =
                     this._clickable[mapType]
                     && (data.clickable == null || data.clickable);
-                
+
                 if (this._selectedMode[mapType]) {
                     this._selected[name] = this._selected[name] != null
                                            ? this._selected[name]
                                            : data.selected;
                     this._mapTypeMap[name] = mapType;
-                    
+
                     if (data.selectable == null || data.selectable) {
                         shape.clickable = textShape.clickable = true;
                         shape.onclick = textShape.onclick = this.shapeHandler.onclick;
                     }
                 }
-                
+
                 if (this._hoverable[mapType]
                     && (data.hoverable == null || data.hoverable)
                 ) {
@@ -878,7 +955,7 @@ define(function (require) {
                 else {
                     textShape.hoverable = shape.hoverable = false;
                 }
-                
+
                 // console.log(name,shape);
                 ecData.pack(
                     textShape,
@@ -891,7 +968,7 @@ define(function (require) {
                     name
                 );
                 this.shapeList.push(textShape);
-                
+
                 ecData.pack(
                     shape,
                     {
@@ -906,7 +983,7 @@ define(function (require) {
             }
             //console.log(this._selected);
         },
-        
+
         // 添加标注
         _buildMark : function (mapType, mapSeries) {
             this._seriesIndexToMapType = this._seriesIndexToMapType || {};
@@ -927,25 +1004,86 @@ define(function (require) {
                 this.buildMark(sIdx);
             }
         },
-        
+
+        _buildHeatmap: function(mapType) {
+            var series = this.series;
+            for (var i = 0, l = series.length; i < l; i++) {
+                // render heatmap
+                if (series[i].heatmap) {
+                    // convert geo position to screen position
+                    var data = series[i].heatmap.data;
+                    if (series[i].heatmap.needsTransform === false) {
+                        // baidu map position, does not need transform
+                        var geo = [];
+                        for (var j = 0, len = data.length; j < len; ++j) {
+                            geo.push([data[j][3], data[j][4], data[j][2]]);
+                        }
+                        var pos = [0, 0]
+                    } else {
+                        // other map
+                        var geoData = series[i].heatmap._geoData;
+                        // copy initial geo position
+                        if (geoData === undefined) {
+                            series[i].heatmap._geoData = [];
+                            for (var j = 0, len = data.length; j < len; ++j) {
+                                series[i].heatmap._geoData[j] = data[j];
+                            }
+                            geoData = series[i].heatmap._geoData;
+                        }
+
+                        var len = data.length;
+                        for (var id = 0; id < len; ++id) {
+                            data[id] = this.geo2pos(mapType, 
+                                [geoData[id][0], geoData[id][1]]);
+                        }
+                        var pos = [
+                            this._mapDataMap[mapType].transform.left,
+                            this._mapDataMap[mapType].transform.top
+                        ]
+                    }
+                    var layer = new HeatmapLayer(series[i].heatmap);
+                    var canvas = layer.getCanvas(data[0][3] ? geo : data,
+                        this.zr.getWidth(), this.zr.getHeight())
+                    var image = new ZrImage({
+                        zlevel: this.getZlevelBase(),
+                        z: this.getZBase() + 1,
+                        position: pos,
+                        scale: [1, 1],
+                        hoverable: false,
+                        style: {
+                            x: 0,
+                            y: 0,
+                            image: canvas,
+                            width: canvas.width,
+                            height: canvas.height
+                        }
+                    });
+                    image.type = 'heatmap';
+                    image._mapType = mapType;
+                    this.shapeList.push(image);
+                    this.zr.addShape(image);
+                }
+            }
+        },
+
         // 位置转换
         getMarkCoord : function (seriesIndex, mpData) {
             return (mpData.geoCoord || _geoCoord[mpData.name])
                    ? this.geo2pos(
-                         this._seriesIndexToMapType[seriesIndex], 
+                         this._seriesIndexToMapType[seriesIndex],
                          mpData.geoCoord || _geoCoord[mpData.name]
                      )
                    : [0, 0];
         },
-        
+
         getMarkGeo : function(mpData) {
             return mpData.geoCoord || _geoCoord[mpData.name];
         },
-        
+
         _nameChange : function (mapType, name) {
             return this._nameMap[mapType][name] || name;
         },
-        
+
         /**
          * 根据lable.format计算label text
          */
@@ -974,7 +1112,7 @@ define(function (require) {
                 return name;
             }
         },
-        
+
         _findMapTypeByPos : function (mx, my) {
             var transform;
             var left;
@@ -986,7 +1124,7 @@ define(function (require) {
                 if (!transform || !this._roamMap[mapType] || !this._activeMapType[mapType]) {
                     continue;
                 }
-                
+
                 left = transform.left;
                 top = transform.top;
                 width = transform.width;
@@ -1001,15 +1139,23 @@ define(function (require) {
             }
             return;
         },
-        
+
         /**
-         * 滚轮缩放 
+         * 滚轮缩放
          */
         __onmousewheel : function (params) {
             if (this.shapeList.length <= 0) {
                 return;
             }
-            
+
+            for (var i = 0, l = this.shapeList.length; i < l; i++) {
+                var shape = this.shapeList[i];
+                // If any shape is still animating
+                if (shape.__animating) {
+                    return;
+                }
+            }
+
             var event = params.event;
             var mx = zrEvent.getX(event);
             var my = zrEvent.getY(event);
@@ -1025,7 +1171,35 @@ define(function (require) {
                     mapTypeControl[mapType] = true;
                 }
             }
-            
+
+            function scalePolyline(shapeStyle, delta) {
+                for (var i = 0; i < shapeStyle.pointList.length; i++) {
+                    var point = shapeStyle.pointList[i];
+                    point[0] *= delta;
+                    point[1] *= delta;
+                }
+                //If smoothness > 0
+                var controlPointList = shapeStyle.controlPointList;
+                if (controlPointList) {
+                    for (var i = 0; i < controlPointList.length; i++) {
+                        var point = controlPointList[i];
+                        point[0] *= delta;
+                        point[1] *= delta;
+                    }
+                }
+            }
+
+            function scaleMarkline(shapeStyle, delta) {
+                shapeStyle.xStart *= delta;
+                shapeStyle.yStart *= delta;
+                shapeStyle.xEnd *= delta;
+                shapeStyle.yEnd *= delta;
+                if (shapeStyle.cpX1 != null) {
+                    shapeStyle.cpX1 *= delta;
+                    shapeStyle.cpY1 *= delta;
+                }
+            }
+
             var haveScale = false;
             for (mapType in mapTypeControl) {
                 if (mapTypeControl[mapType]) {
@@ -1053,13 +1227,13 @@ define(function (require) {
                             continue;     // 缩放限制
                         }
                     }
-                    
+
                     transform.baseScale *= delta;
                     transform.scale.x *= delta;
                     transform.scale.y *= delta;
                     transform.width = width * delta;
                     transform.height = height * delta;
-                    
+
                     this._mapDataMap[mapType].hasRoam = true;
                     this._mapDataMap[mapType].transform = transform;
                     // 经纬度转位置
@@ -1068,61 +1242,74 @@ define(function (require) {
                     transform.left -= geoAndPos[0] - (mx - left);
                     transform.top -= geoAndPos[1] - (my - top);
                     this._mapDataMap[mapType].transform = transform;
-                    
+
                     this.clearEffectShape(true);
                     for (var i = 0, l = this.shapeList.length; i < l; i++) {
-                        if(this.shapeList[i]._mapType == mapType) {
-                            this.shapeList[i].position[0] = transform.left;
-                            this.shapeList[i].position[1] = transform.top;
-                            if (this.shapeList[i].type == 'path' 
-                                || this.shapeList[i].type == 'symbol'
-                                || this.shapeList[i].type == 'circle'
-                                || this.shapeList[i].type == 'rectangle'
-                                || this.shapeList[i].type == 'polygon'
-                                || this.shapeList[i].type == 'line'
-                                || this.shapeList[i].type == 'ellipse'
-                            ) {
-                                this.shapeList[i].scale[0] *= delta;
-                                this.shapeList[i].scale[1] *= delta;
+                        var shape = this.shapeList[i];
+                        if(shape._mapType == mapType) {
+                            var shapeType = shape.type;
+                            var shapeStyle = shape.style;
+                            shape.position[0] = transform.left;
+                            shape.position[1] = transform.top;
+
+                            switch (shapeType) {
+                                case 'path':
+                                case 'symbol':
+                                case 'circle':
+                                case 'rectangle':
+                                case 'polygon':
+                                case 'line':
+                                case 'ellipse':
+                                case 'heatmap':
+                                    shape.scale[0] *= delta;
+                                    shape.scale[1] *= delta;
+                                    break;
+                                case 'mark-line':
+                                    scaleMarkline(shapeStyle, delta);
+                                    break;
+                                case 'polyline':
+                                    scalePolyline(shapeStyle, delta);
+                                    break;
+                                case 'shape-bundle':
+                                    for (var j = 0; j < shapeStyle.shapeList.length; j++) {
+                                        var subShape = shapeStyle.shapeList[j];
+                                        if (subShape.type == 'mark-line') {
+                                            scaleMarkline(subShape.style, delta);
+                                        }
+                                        else if (subShape.type == 'polyline') {
+                                            scalePolyline(subShape.style, delta);
+                                        }
+                                    }
+                                    break;
+                                case 'icon':
+                                case 'image':
+                                    geoAndPos = this.geo2pos(mapType, shape._geo);
+                                    shapeStyle.x = shapeStyle._x =
+                                        geoAndPos[0] - shapeStyle.width / 2;
+                                    shapeStyle.y = shapeStyle._y =
+                                        geoAndPos[1] - shapeStyle.height / 2;
+                                    break;
+                                default:
+                                    geoAndPos = this.geo2pos(mapType, shape._geo);
+                                    shapeStyle.x = geoAndPos[0];
+                                    shapeStyle.y = geoAndPos[1];
+                                    if (shapeType == 'text') {
+                                        shape._style.x = shape.highlightStyle.x
+                                                                   = geoAndPos[0];
+                                        shape._style.y = shape.highlightStyle.y
+                                                                   = geoAndPos[1];
+                                    }
                             }
-                            else if (this.shapeList[i].type == 'mark-line') {
-                                this.shapeList[i].style.pointListLength = undefined;
-                                this.shapeList[i].style.pointList = false;
-                                geoAndPos = this.geo2pos(mapType, this.shapeList[i]._geo[0]);
-                                this.shapeList[i].style.xStart = geoAndPos[0];
-                                this.shapeList[i].style.yStart = geoAndPos[1];
-                                geoAndPos = this.geo2pos(mapType, this.shapeList[i]._geo[1]);
-                                this.shapeList[i]._x = this.shapeList[i].style.xEnd = geoAndPos[0];
-                                this.shapeList[i]._y = this.shapeList[i].style.yEnd = geoAndPos[1];
-                            }
-                            else if  (this.shapeList[i].type == 'icon') {
-                                geoAndPos = this.geo2pos(mapType, this.shapeList[i]._geo);
-                                this.shapeList[i].style.x = this.shapeList[i].style._x =
-                                    geoAndPos[0] - this.shapeList[i].style.width / 2;
-                                this.shapeList[i].style.y = this.shapeList[i].style._y =
-                                    geoAndPos[1] - this.shapeList[i].style.height / 2;
-                            }
-                            else {
-                                geoAndPos = this.geo2pos(mapType, this.shapeList[i]._geo);
-                                this.shapeList[i].style.x = geoAndPos[0];
-                                this.shapeList[i].style.y = geoAndPos[1];
-                                if (this.shapeList[i].type == 'text') {
-                                    this.shapeList[i]._style.x = this.shapeList[i].highlightStyle.x
-                                                               = geoAndPos[0];
-                                    this.shapeList[i]._style.y = this.shapeList[i].highlightStyle.y
-                                                               = geoAndPos[1];
-                                }
-                            }
-                            
-                            this.zr.modShape(this.shapeList[i].id);
+
+                            this.zr.modShape(shape.id);
                         }
                     }
                 }
             }
             if (haveScale) {
                 zrEvent.stop(event);
-                this.zr.refresh();
-                
+                this.zr.refreshNextFrame();
+
                 var self = this;
                 clearTimeout(this._refreshDelayTicket);
                 this._refreshDelayTicket = setTimeout(
@@ -1131,7 +1318,7 @@ define(function (require) {
                     },
                     100
                 );
-                
+
                 this.messageCenter.dispatch(
                     ecConfig.EVENT.MAP_ROAM,
                     params.event,
@@ -1140,7 +1327,7 @@ define(function (require) {
                 );
             }
         },
-        
+
         __onmousedown : function (params) {
             if (this.shapeList.length <= 0) {
                 return;
@@ -1164,9 +1351,9 @@ define(function (require) {
                     self.zr.on(zrConfig.EVENT.MOUSEMOVE, self._onmousemove);
                 },100);
             }
-            
+
         },
-        
+
         __onmousemove : function (params) {
             if (!this._mousedown || !this._isAlive) {
                 return;
@@ -1181,7 +1368,7 @@ define(function (require) {
             this._mx = mx;
             this._my = my;
             this._mapDataMap[this._curMapType].transform = transform;
-            
+
             for (var i = 0, l = this.shapeList.length; i < l; i++) {
                 if(this.shapeList[i]._mapType == this._curMapType) {
                     this.shapeList[i].position[0] = transform.left;
@@ -1189,21 +1376,21 @@ define(function (require) {
                     this.zr.modShape(this.shapeList[i].id);
                 }
             }
-            
+
             this.messageCenter.dispatch(
                 ecConfig.EVENT.MAP_ROAM,
                 params.event,
                 {type : 'move'},
                 this.myChart
             );
-            
+
             this.clearEffectShape(true);
-            this.zr.refresh();
-            
+            this.zr.refreshNextFrame();
+
             this._justMove = true;
             zrEvent.stop(event);
         },
-        
+
         __onmouseup : function (params) {
             var event = params.event;
             this._mx = zrEvent.getX(event);
@@ -1217,7 +1404,7 @@ define(function (require) {
                 self.zr.un(zrConfig.EVENT.MOUSEUP, self._onmouseup);
             },120);
         },
-        
+
         /**
          * 漫游组件事件响应
          */
@@ -1229,7 +1416,7 @@ define(function (require) {
             var top = 0;
             var left = 0;
             var step = params.step;
-            
+
             switch(params.roamType) {
                 case 'scaleUp':
                     event.zrenderDelta = 1;
@@ -1258,7 +1445,7 @@ define(function (require) {
                     left = step;
                     break;
             }
-            
+
             var transform;
             var curMapType;
             for (curMapType in mapTypeControl) {
@@ -1281,24 +1468,24 @@ define(function (require) {
                 this.shapeList[i].position[1] = transform.top;
                 this.zr.modShape(this.shapeList[i].id);
             }
-            
+
             this.messageCenter.dispatch(
                 ecConfig.EVENT.MAP_ROAM,
                 params.event,
                 {type : 'move'},
                 this.myChart
             );
-            
+
             this.clearEffectShape(true);
-            this.zr.refresh();
-            
+            this.zr.refreshNextFrame();
+
             clearTimeout(this.dircetionTimer);
             var self = this;
             this.dircetionTimer = setTimeout(function() {
                 self.animationEffect();
             }, 150);
         },
-        
+
         /**
          * dataRange hoverlink 事件响应
          */
@@ -1316,9 +1503,9 @@ define(function (require) {
                 }
             }
         },
-        
+
         /**
-         * 点击响应 
+         * 点击响应
          */
         onclick : function (params) {
             if (!this.isClick || !params.target || this._justMove || params.target.type == 'icon') {
@@ -1331,14 +1518,14 @@ define(function (require) {
             var name = target.style._name;
             var len = this.shapeList.length;
             var mapType = target._mapType || '';
-            
+
             if (this._selectedMode[mapType] == 'single') {
                 for (var p in this._selected) {
                     // 同一地图类型
                     if (this._selected[p] && this._mapTypeMap[p] == mapType) {
                         // 复位那些生效shape（包括文字）
                         for (var i = 0; i < len; i++) {
-                            if (this.shapeList[i].style._name == p 
+                            if (this.shapeList[i].style._name == p
                                 && this.shapeList[i]._mapType == mapType
                             ) {
                                 this.shapeList[i].style = this.shapeList[i]._style;
@@ -1351,7 +1538,7 @@ define(function (require) {
             }
 
             this._selected[name] = !this._selected[name];
-            
+
             // 更新当前点击shape（包括文字）
             for (var i = 0; i < len; i++) {
                 if (this.shapeList[i].style._name == name
@@ -1375,8 +1562,8 @@ define(function (require) {
                 },
                 this.myChart
             );
-            this.zr.refresh();
-            
+            this.zr.refreshNextFrame();
+
             var self = this;
             setTimeout(function(){
                 self.zr.trigger(
@@ -1394,7 +1581,7 @@ define(function (require) {
                 this.option = newOption;
                 this.series = newOption.series;
             }
-            
+
             if (this._mapDataRequireCounter > 0) {
                 this.clear();
             }
@@ -1404,7 +1591,7 @@ define(function (require) {
             this._buildShape();
             this.zr.refreshHover();
         },
-        
+
         /**
          * 值域响应
          * @param {Object} param
@@ -1417,7 +1604,7 @@ define(function (require) {
             }
             return;
         },
-        
+
         /**
          * 平面坐标转经纬度
          */
@@ -1429,7 +1616,7 @@ define(function (require) {
                 this._mapDataMap[mapType].transform, p
             );
         },
-        
+
         /**
          * 公开接口 : 平面坐标转经纬度
          */
@@ -1451,7 +1638,7 @@ define(function (require) {
             }
             return this.pos2geo(mapType, p);
         },
-        
+
         /**
          * 经纬度转平面坐标
          * @param {Object} p
@@ -1464,7 +1651,7 @@ define(function (require) {
                 this._mapDataMap[mapType].transform, p
             );
         },
-        
+
         /**
          * 公开接口 : 经纬度转平面坐标
          */
@@ -1477,7 +1664,7 @@ define(function (require) {
             pos[1] += this._mapDataMap[mapType].transform.top;
             return pos;
         },
-        
+
         /**
          * 公开接口 : 地图参考坐标
          */
@@ -1490,14 +1677,15 @@ define(function (require) {
                 this._mapDataMap[mapType].transform.top
             ];
         },
-        
+
         /*
         appendShape : function (mapType, shapeList) {
             shapeList = shapeList instanceof Array
                         ? shapeList : [shapeList];
             for (var i = 0, l = shapeList.length; i < l; i++) {
                 if (typeof shapeList[i].zlevel == 'undefined') {
-                    shapeList[i].zlevel = this._zlevelBase + 1;
+                    shapeList[i].zlevel = this.getZlevelBase();
+                    shapeList[i].z = this.getZBase() + 1;
                 }
                 shapeList[i]._mapType = mapType;
                 this.shapeList.push(shapeList[i]);
@@ -1506,7 +1694,7 @@ define(function (require) {
             this.zr.refresh();
         },
         */
-       
+
         /**
          * 释放后实例不可用
          */
@@ -1522,12 +1710,11 @@ define(function (require) {
             );
         }
     };
-    
+
     zrUtil.inherits(Map, ChartBase);
-    zrUtil.inherits(Map, ComponentBase);
-    
+
     // 图表注册
     require('../chart').define('map', Map);
-    
+
     return Map;
 });

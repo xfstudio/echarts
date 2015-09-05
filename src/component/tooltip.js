@@ -2,7 +2,7 @@
  * echarts组件：提示框
  *
  * @desc echarts基于Canvas，纯Javascript图表库，提供直观，生动，可交互，可个性化定制的数据统计图表。
- * @author Kener (@Kener-林峰, linzhifeng@baidu.com)
+ * @author Kener (@Kener-林峰, kener.linfeng@gmail.com)
  *
  */
 define(function (require) {
@@ -15,6 +15,49 @@ define(function (require) {
     var rectangleInstance = new RectangleShape({});
     
     var ecConfig = require('../config');
+    // 提示框
+    ecConfig.tooltip = {
+        zlevel: 1,                  // 一级层叠，频繁变化的tooltip指示器在pc上独立一层
+        z: 8,                       // 二级层叠
+        show: true,
+        showContent: true,         // tooltip主体内容
+        trigger: 'item',           // 触发类型，默认数据触发，见下图，可选为：'item' ¦ 'axis'
+        // position: null          // 位置 {Array} | {Function}
+        // formatter: null         // 内容格式器：{string}（Template） ¦ {Function}
+        islandFormatter: '{a} <br/>{b} : {c}',  // 数据孤岛内容格式器
+        showDelay: 20,             // 显示延迟，添加显示延迟可以避免频繁切换，单位ms
+        hideDelay: 100,            // 隐藏延迟，单位ms
+        transitionDuration: 0.4,   // 动画变换时间，单位s
+        enterable: false,
+        backgroundColor: 'rgba(0,0,0,0.7)',     // 提示背景颜色，默认为透明度为0.7的黑色
+        borderColor: '#333',       // 提示边框颜色
+        borderRadius: 4,           // 提示边框圆角，单位px，默认为4
+        borderWidth: 0,            // 提示边框线宽，单位px，默认为0（无边框）
+        padding: 5,                // 提示内边距，单位px，默认各方向内边距为5，
+                                   // 接受数组分别设定上右下左边距，同css
+        axisPointer: {             // 坐标轴指示器，坐标轴触发有效
+            type: 'line',          // 默认为直线，可选为：'line' | 'shadow' | 'cross'
+            lineStyle: {           // 直线指示器样式设置
+                color: '#48b',
+                width: 2,
+                type: 'solid'
+            },
+            crossStyle: {
+                color: '#1e90ff',
+                width: 1,
+                type: 'dashed'
+            },
+            shadowStyle: {                      // 阴影指示器样式设置
+                color: 'rgba(150,150,150,0.3)', // 阴影颜色
+                width: 'auto',                  // 阴影大小
+                type: 'default'
+            }
+        },
+        textStyle: {
+            color: '#fff'
+        }
+    };
+
     var ecData = require('../util/ecData');
     var zrConfig = require('zrender/config');
     var zrEvent = require('zrender/tool/event');
@@ -72,12 +115,14 @@ define(function (require) {
         this._tDom.onmouseout = function() {
             self._mousein = false;
         };
+        this._tDom.className = 'echarts-tooltip';
         this._tDom.style.position = 'absolute';  // 不是多余的，别删！
         this.hasAppend = false;
         
         this._axisLineShape && this.zr.delShape(this._axisLineShape.id);
         this._axisLineShape = new LineShape({
-            zlevel: this._zlevelBase,
+            zlevel: this.getZlevelBase(),
+            z: this.getZBase(),
             invisible: true,
             hoverable: false
         });
@@ -86,7 +131,8 @@ define(function (require) {
         
         this._axisShadowShape && this.zr.delShape(this._axisShadowShape.id);
         this._axisShadowShape = new LineShape({
-            zlevel: 1,                      // grid上，chart下
+            zlevel: this.getZlevelBase(),
+            z: 1,                      // grid上，chart下
             invisible: true,
             hoverable: false
         });
@@ -95,7 +141,8 @@ define(function (require) {
         
         this._axisCrossShape && this.zr.delShape(this._axisCrossShape.id);
         this._axisCrossShape = new CrossShape({
-            zlevel: this._zlevelBase,
+            zlevel: this.getZlevelBase(),
+            z: this.getZBase(),
             invisible: true,
             hoverable: false
         });
@@ -213,6 +260,9 @@ define(function (require) {
         },
         
         __hide: function () {
+            this._lastDataIndex = -1;
+            this._lastSeriesIndex = -1;
+            this._lastItemTriggerId = -1;
             if (this._tDom) {
                 this._tDom.style.display = 'none';
             }
@@ -237,7 +287,7 @@ define(function (require) {
                 this._lastTipShape = false;
                 this.shapeList.length = 2;
             }
-            needRefresh && this.zr.refresh();
+            needRefresh && this.zr.refreshNextFrame();
             this.showing = false;
         },
         
@@ -625,76 +675,81 @@ define(function (require) {
             }
 
             if (seriesArray.length > 0) {
-                var data;
-                var value;
-                if (typeof formatter === 'function') {
-                    var params = [];
-                    for (var i = 0, l = seriesArray.length; i < l; i++) {
-                        data = seriesArray[i].data[dataIndex];
-                        value = data != null
-                                ? (data.value != null ? data.value : data)
-                                : '-';
-                        
-                        params.push([
-                            seriesArray[i].name || '',
-                            categoryAxis.getNameByIndex(dataIndex),
-                            value,
-                            data
-                        ]);
-                    }
-                    this._curTicket = 'axis:' + dataIndex;
-                    this._tDom.innerHTML = formatter.call(
-                        this.myChart, params, this._curTicket, this._setContent
-                    );
-                }
-                else if (typeof formatter === 'string') {
-                    this._curTicket = NaN;
-                    formatter = formatter.replace('{a}','{a0}')
-                                         .replace('{b}','{b0}')
-                                         .replace('{c}','{c0}');
-                    for (var i = 0, l = seriesArray.length; i < l; i++) {
-                        formatter = formatter.replace(
-                            '{a' + i + '}',
-                            this._encodeHTML(seriesArray[i].name || '')
-                        );
-                        formatter = formatter.replace(
-                            '{b' + i + '}',
-                            this._encodeHTML(categoryAxis.getNameByIndex(dataIndex))
-                        );
-                        data = seriesArray[i].data[dataIndex];
-                        data = data != null
-                               ? (data.value != null
-                                   ? data.value
-                                   : data)
-                               : '-';
-                        formatter = formatter.replace(
-                            '{c' + i + '}',
-                            data instanceof Array 
-                            ? data : this.numAddCommas(data)
+                // 复位item trigger和axis trigger间短距离来回变换时的不响应
+                this._lastItemTriggerId = -1;
+                // 相同dataIndex seriesIndex时不再触发内容更新
+                if (this._lastDataIndex != dataIndex || this._lastSeriesIndex != seriesIndex[0]) {
+                    this._lastDataIndex = dataIndex;
+                    this._lastSeriesIndex = seriesIndex[0];
+                    var data;
+                    var value;
+                    if (typeof formatter === 'function') {
+                        var params = [];
+                        for (var i = 0, l = seriesArray.length; i < l; i++) {
+                            data = seriesArray[i].data[dataIndex];
+                            value = this.getDataFromOption(data, '-');
+                            
+                            params.push({
+                                seriesIndex: seriesIndex[i],
+                                seriesName: seriesArray[i].name || '',
+                                series: seriesArray[i],
+                                dataIndex: dataIndex,
+                                data: data,
+                                name: categoryAxis.getNameByIndex(dataIndex),
+                                value: value,
+                                // 向下兼容
+                                0: seriesArray[i].name || '',
+                                1: categoryAxis.getNameByIndex(dataIndex),
+                                2: value,
+                                3: data
+                            });
+                        }
+                        this._curTicket = 'axis:' + dataIndex;
+                        this._tDom.innerHTML = formatter.call(
+                            this.myChart, params, this._curTicket, this._setContent
                         );
                     }
-                    this._tDom.innerHTML = formatter;
-                }
-                else {
-                    this._curTicket = NaN;
-                    formatter = this._encodeHTML(
-                        categoryAxis.getNameByIndex(dataIndex)
-                    );
-
-                    for (var i = 0, l = seriesArray.length; i < l; i++) {
-                        formatter += '<br/>' 
-                                     + this._encodeHTML(seriesArray[i].name || '')
-                                     + ' : ';
-                        data = seriesArray[i].data[dataIndex];
-                        data = data != null
-                               ? (data.value != null
-                                   ? data.value
-                                   : data)
-                               : '-';
-                        formatter += data instanceof Array 
-                                     ? data : this.numAddCommas(data);
+                    else if (typeof formatter === 'string') {
+                        this._curTicket = NaN;
+                        formatter = formatter.replace('{a}','{a0}')
+                                             .replace('{b}','{b0}')
+                                             .replace('{c}','{c0}');
+                        for (var i = 0, l = seriesArray.length; i < l; i++) {
+                            formatter = formatter.replace(
+                                '{a' + i + '}',
+                                this._encodeHTML(seriesArray[i].name || '')
+                            );
+                            formatter = formatter.replace(
+                                '{b' + i + '}',
+                                this._encodeHTML(categoryAxis.getNameByIndex(dataIndex))
+                            );
+                            data = seriesArray[i].data[dataIndex];
+                            data = this.getDataFromOption(data, '-');
+                            formatter = formatter.replace(
+                                '{c' + i + '}',
+                                data instanceof Array 
+                                ? data : this.numAddCommas(data)
+                            );
+                        }
+                        this._tDom.innerHTML = formatter;
                     }
-                    this._tDom.innerHTML = formatter;
+                    else {
+                        this._curTicket = NaN;
+                        formatter = this._encodeHTML(
+                            categoryAxis.getNameByIndex(dataIndex)
+                        );
+    
+                        for (var i = 0, l = seriesArray.length; i < l; i++) {
+                            formatter += '<br/>' 
+                                         + this._encodeHTML(seriesArray[i].name || '')
+                                         + ' : ';
+                            data = seriesArray[i].data[dataIndex];
+                            data = this.getDataFromOption(data, '-');
+                            formatter += data instanceof Array 
+                                         ? data : this.numAddCommas(data);
+                        }
+                        this._tDom.innerHTML = formatter;
+                    }
                 }
 
                 // don't modify, just false, showContent == undefined == true
@@ -726,6 +781,7 @@ define(function (require) {
             }
             var series = this.option.series;
             var seriesArray = [];
+            var seriesIndex = [];
 
             var formatter;
             var position;
@@ -756,11 +812,13 @@ define(function (require) {
                                || position;
                     specialCssText += this._style(this.query(series[i], 'tooltip'));
                     seriesArray.push(series[i]);
+                    seriesIndex.push(i);
                 }
             }
             if (seriesArray.length > 0) {
                 var polarData;
                 var data;
+                var value;
                 var params = [];
 
                 for (var i = 0, l = seriesArray.length; i < l; i++) {
@@ -773,61 +831,77 @@ define(function (require) {
                         data = data != null
                                ? data
                                : {name:'', value: {dataIndex:'-'}};
-                               
-                        params.push([
-                            seriesArray[i].name || '',
-                            data.name,
-                            data.value[dataIndex].value != null
-                                ? data.value[dataIndex].value : data.value[dataIndex],
-                            indicatorName
-                        ]);
+                        value = this.getDataFromOption(data.value[dataIndex]);
+                        params.push({
+                            seriesIndex: seriesIndex[i],
+                            seriesName: seriesArray[i].name || '',
+                            series: seriesArray[i],
+                            dataIndex: dataIndex,
+                            data: data,
+                            name: data.name,
+                            indicator: indicatorName,
+                            value: value,
+                            // 向下兼容
+                            0: seriesArray[i].name || '',
+                            1: data.name,
+                            2: value,
+                            3: indicatorName
+                        });
                     }
                 }
                 if (params.length <= 0) {
                     return;
                 }
-                if (typeof formatter === 'function') {
-                    this._curTicket = 'axis:' + dataIndex;
-                    this._tDom.innerHTML = formatter.call(
-                        this.myChart, params, this._curTicket, this._setContent
-                    );
-                }
-                else if (typeof formatter === 'string') {
-                    formatter = formatter.replace('{a}','{a0}')
-                                         .replace('{b}','{b0}')
-                                         .replace('{c}','{c0}')
-                                         .replace('{d}','{d0}');
-                    for (var i = 0, l = params.length; i < l; i++) {
-                        formatter = formatter.replace(
-                            '{a' + i + '}',
-                            this._encodeHTML(params[i][0])
-                        );
-                        formatter = formatter.replace(
-                            '{b' + i + '}',
-                            this._encodeHTML(params[i][1])
-                        );
-                        formatter = formatter.replace(
-                            '{c' + i + '}',
-                            this.numAddCommas(params[i][2])
-                        );
-                        formatter = formatter.replace(
-                            '{d' + i + '}',
-                            this._encodeHTML(params[i][3])
+                // 复位item trigger和axis trigger间短距离来回变换时的不响应
+                this._lastItemTriggerId = -1;
+
+                // 相同dataIndex seriesIndex时不再触发内容更新
+                if (this._lastDataIndex != dataIndex || this._lastSeriesIndex != seriesIndex[0]) {
+                    this._lastDataIndex = dataIndex;
+                    this._lastSeriesIndex = seriesIndex[0];
+                    if (typeof formatter === 'function') {
+                        this._curTicket = 'axis:' + dataIndex;
+                        this._tDom.innerHTML = formatter.call(
+                            this.myChart, params, this._curTicket, this._setContent
                         );
                     }
-                    this._tDom.innerHTML = formatter;
-                }
-                else {
-                    formatter = this._encodeHTML(params[0][1]) + '<br/>' 
-                                + this._encodeHTML(params[0][3]) + ' : ' 
-                                + this.numAddCommas(params[0][2]);
-                    for (var i = 1, l = params.length; i < l; i++) {
-                        formatter += '<br/>' + this._encodeHTML(params[i][1]) 
-                                     + '<br/>';
-                        formatter += this._encodeHTML(params[i][3]) + ' : ' 
-                                     + this.numAddCommas(params[i][2]);
+                    else if (typeof formatter === 'string') {
+                        formatter = formatter.replace('{a}','{a0}')
+                                             .replace('{b}','{b0}')
+                                             .replace('{c}','{c0}')
+                                             .replace('{d}','{d0}');
+                        for (var i = 0, l = params.length; i < l; i++) {
+                            formatter = formatter.replace(
+                                '{a' + i + '}',
+                                this._encodeHTML(params[i].seriesName)
+                            );
+                            formatter = formatter.replace(
+                                '{b' + i + '}',
+                                this._encodeHTML(params[i].name)
+                            );
+                            formatter = formatter.replace(
+                                '{c' + i + '}',
+                                this.numAddCommas(params[i].value)
+                            );
+                            formatter = formatter.replace(
+                                '{d' + i + '}',
+                                this._encodeHTML(params[i].indicator)
+                            );
+                        }
+                        this._tDom.innerHTML = formatter;
                     }
-                    this._tDom.innerHTML = formatter;
+                    else {
+                        formatter = this._encodeHTML(params[0].name) + '<br/>' 
+                                    + this._encodeHTML(params[0].indicator) + ' : ' 
+                                    + this.numAddCommas(params[0].value);
+                        for (var i = 1, l = params.length; i < l; i++) {
+                            formatter += '<br/>' + this._encodeHTML(params[i].name) 
+                                         + '<br/>';
+                            formatter += this._encodeHTML(params[i].indicator) + ' : ' 
+                                         + this.numAddCommas(params[i].value);
+                        }
+                        this._tDom.innerHTML = formatter;
+                    }
                 }
 
                 // don't modify, just false, showContent == undefined == true
@@ -860,11 +934,14 @@ define(function (require) {
                 return;
             }
             var serie = ecData.get(this._curTarget, 'series');
+            var seriesIndex = ecData.get(this._curTarget, 'seriesIndex');
             var data = ecData.get(this._curTarget, 'data');
+            var dataIndex = ecData.get(this._curTarget, 'dataIndex');
             var name = ecData.get(this._curTarget, 'name');
             var value = ecData.get(this._curTarget, 'value');
             var special = ecData.get(this._curTarget, 'special');
             var special2 = ecData.get(this._curTarget, 'special2');
+            var queryTarget = [data, serie, this.option];
             // 从低优先级往上找到trigger为item的formatter和样式
             var formatter;
             var position;
@@ -891,83 +968,112 @@ define(function (require) {
                 specialCssText += this._style(this.query(data, 'tooltip'));
             }
             else {
-                showContent = this.deepQuery([data, serie, this.option], 'tooltip.showContent');
-                formatter = this.deepQuery([data, serie, this.option], 'tooltip.islandFormatter');
-                position = this.deepQuery([data, serie, this.option], 'tooltip.islandPosition');
+                this._lastItemTriggerId = NaN;
+                showContent = this.deepQuery(queryTarget, 'tooltip.showContent');
+                formatter = this.deepQuery(queryTarget, 'tooltip.islandFormatter');
+                position = this.deepQuery(queryTarget, 'tooltip.islandPosition');
             }
 
-            if (typeof formatter === 'function') {
-                this._curTicket = (serie.name || '')
-                                  + ':'
-                                  + ecData.get(this._curTarget, 'dataIndex');
-                this._tDom.innerHTML = formatter.call(
-                    this.myChart,
-                    [
-                        serie.name || '',
-                        name,
-                        value,
-                        special,
-                        special2,
-                        data
-                    ],
-                    this._curTicket,
-                    this._setContent
-                );
-            }
-            else if (typeof formatter === 'string') {
-                this._curTicket = NaN;
-                formatter = formatter.replace('{a}', '{a0}')
-                                     .replace('{b}', '{b0}')
-                                     .replace('{c}', '{c0}');
-                formatter = formatter.replace('{a0}', this._encodeHTML(serie.name || ''))
-                                     .replace('{b0}', this._encodeHTML(name))
-                                     .replace(
-                                         '{c0}',
-                                         value instanceof Array ? value : this.numAddCommas(value)
-                                     );
+            // 复位item trigger和axis trigger间短距离来回变换时的不响应
+            this._lastDataIndex = -1;
+            this._lastSeriesIndex = -1;
 
-                formatter = formatter.replace('{d}', '{d0}')
-                                     .replace('{d0}', special || '');
-                formatter = formatter.replace('{e}', '{e0}')
-                                     .replace(
-                                         '{e0}',
-                                         ecData.get(this._curTarget, 'special2') || ''
-                                     );
-
-                this._tDom.innerHTML = formatter;
-            }
-            else {
-                this._curTicket = NaN;
-                if (serie.type === ecConfig.CHART_TYPE_RADAR && special) {
-                    this._tDom.innerHTML = this._itemFormatter.radar.call(
-                        this, serie, name, value, special
+            // 相同dataIndex seriesIndex时不再触发内容更新
+            if (this._lastItemTriggerId !== this._curTarget.id) {
+                this._lastItemTriggerId = this._curTarget.id;
+                if (typeof formatter === 'function') {
+                    this._curTicket = (serie.name || '') + ':' + dataIndex;
+                    this._tDom.innerHTML = formatter.call(
+                        this.myChart,
+                        {
+                            seriesIndex: seriesIndex,
+                            seriesName: serie.name || '',
+                            series: serie,
+                            dataIndex: dataIndex,
+                            data: data,
+                            name: name,
+                            value: value,
+                            percent: special,   // 饼图
+                            indicator: special, // 雷达图
+                            value2: special2,
+                            indicator2: special2,
+                            // 向下兼容
+                            0: serie.name || '',
+                            1: name,
+                            2: value,
+                            3: special,
+                            4: special2,
+                            5: data,
+                            6: seriesIndex,
+                            7: dataIndex
+                        },
+                        this._curTicket,
+                        this._setContent
                     );
                 }
-                else if (serie.type === ecConfig.CHART_TYPE_CHORD) {
-                    this._tDom.innerHTML = this._itemFormatter.chord.call(
-                        this, serie, name, value, special, special2
-                    );
-                }
-                else if (serie.type === ecConfig.CHART_TYPE_EVENTRIVER) {
-                    this._tDom.innerHTML = this._itemFormatter.eventRiver.call(
-                        this, serie, name, value, data
-                    );
+                else if (typeof formatter === 'string') {
+                    this._curTicket = NaN;
+                    formatter = formatter.replace('{a}', '{a0}')
+                                         .replace('{b}', '{b0}')
+                                         .replace('{c}', '{c0}');
+                    formatter = formatter.replace('{a0}', this._encodeHTML(serie.name || ''))
+                                         .replace('{b0}', this._encodeHTML(name))
+                                         .replace(
+                                             '{c0}',
+                                             value instanceof Array ? value : this.numAddCommas(value)
+                                         );
+    
+                    formatter = formatter.replace('{d}', '{d0}')
+                                         .replace('{d0}', special || '');
+                    formatter = formatter.replace('{e}', '{e0}')
+                                         .replace(
+                                             '{e0}',
+                                             ecData.get(this._curTarget, 'special2') || ''
+                                         );
+    
+                    this._tDom.innerHTML = formatter;
                 }
                 else {
-                    this._tDom.innerHTML = ''
-                        + (serie.name != null ? (this._encodeHTML(serie.name) + '<br/>') : '')
-                        + (name === '' ? '' : (this._encodeHTML(name) + ' : '))
-                        + (value instanceof Array ? value : this.numAddCommas(value))
-                        + (special == null ? '' : (' (' + special + ')'));
+                    this._curTicket = NaN;
+                    if (serie.type === ecConfig.CHART_TYPE_RADAR && special) {
+                        this._tDom.innerHTML = this._itemFormatter.radar.call(
+                            this, serie, name, value, special
+                        );
+                    }
+                    // chord 处理暂时跟 force 一样
+                    // else if (serie.type === ecConfig.CHART_TYPE_CHORD) {
+                    //     this._tDom.innerHTML = this._itemFormatter.chord.call(
+                    //         this, serie, name, value, special, special2
+                    //     );
+                    // }
+                    else if (serie.type === ecConfig.CHART_TYPE_EVENTRIVER) {
+                        this._tDom.innerHTML = this._itemFormatter.eventRiver.call(
+                            this, serie, name, value, data
+                        );
+                    }
+                    else {
+                        this._tDom.innerHTML = ''
+                            + (serie.name != null ? (this._encodeHTML(serie.name) + '<br/>') : '')
+                            + (name === '' ? '' : (this._encodeHTML(name) + ' : '))
+                            + (value instanceof Array ? value : this.numAddCommas(value));
+                    }
                 }
             }
 
-            if (!this._axisLineShape.invisible || !this._axisShadowShape.invisible) {
-                this._axisLineShape.invisible = true;
-                this.zr.modShape(this._axisLineShape.id);
-                this._axisShadowShape.invisible = true;
-                this.zr.modShape(this._axisShadowShape.id);
-                this.zr.refresh();
+            var x = zrEvent.getX(this._event);
+            var y = zrEvent.getY(this._event);
+            if (this.deepQuery(queryTarget, 'tooltip.axisPointer.show') 
+                && this.component.grid
+            ) {
+                this._styleAxisPointer(
+                    [serie],
+                    this.component.grid.getX(), y, 
+                    this.component.grid.getXend(), y,
+                    0, x, y
+                );
+            }
+            else {
+                this._hide();
             }
             
             // don't modify, just false, showContent == undefined == true
@@ -983,12 +1089,7 @@ define(function (require) {
                 this.hasAppend = true;
             }
             
-            this._show(
-                position,
-                zrEvent.getX(this._event) + 20,
-                zrEvent.getY(this._event) - 20,
-                specialCssText
-            );
+            this._show(position, x + 20, y - 20, specialCssText);
         },
 
         _itemFormatter: {
@@ -1064,10 +1165,7 @@ define(function (require) {
                     style[pType].type = axisPointer[pType + 'Style'].type;
                 }
                 for (var i = 0, l = seriesArray.length; i < l; i++) {
-                    if (this.deepQuery(
-                           [seriesArray[i], this.option], 'tooltip.trigger'
-                       ) === 'axis'
-                    ) {
+                    //if (this.deepQuery([seriesArray[i], this.option], 'tooltip.trigger') === 'axis') {
                         queryTarget = seriesArray[i];
                         curType = this.query(queryTarget, 'tooltip.axisPointer.type');
                         pointType = curType || pointType; 
@@ -1085,28 +1183,31 @@ define(function (require) {
                                 'tooltip.axisPointer.' + curType + 'Style.type'
                             ) || style[curType].type;
                         }
-                    }
+                    //}
                 }
                 
                 if (pointType === 'line') {
+                    var lineWidth = style.line.width;
+                    var isVertical = xStart == xEnd;
                     this._axisLineShape.style = {
-                        xStart: xStart,
-                        yStart: yStart,
-                        xEnd: xEnd,
-                        yEnd: yEnd,
+                        xStart: isVertical ? this.subPixelOptimize(xStart, lineWidth) : xStart,
+                        yStart: isVertical ? yStart : this.subPixelOptimize(yStart, lineWidth),
+                        xEnd: isVertical ? this.subPixelOptimize(xEnd, lineWidth) : xEnd,
+                        yEnd: isVertical ? yEnd : this.subPixelOptimize(yEnd, lineWidth),
                         strokeColor: style.line.color,
-                        lineWidth: style.line.width,
+                        lineWidth: lineWidth,
                         lineType: style.line.type
                     };
                     this._axisLineShape.invisible = false;
                     this.zr.modShape(this._axisLineShape.id);
                 }
                 else if (pointType === 'cross') {
+                    var crossWidth = style.cross.width;
                     this._axisCrossShape.style = {
                         brushType: 'stroke',
                         rect: this.component.grid.getArea(),
-                        x: x,
-                        y: y,
+                        x: this.subPixelOptimize(x, crossWidth),
+                        y: this.subPixelOptimize(y, crossWidth),
                         text: ('( ' 
                                + this.component.xAxis.getAxis(0).getValueFromCoord(x)
                                + ' , '
@@ -1115,7 +1216,7 @@ define(function (require) {
                               ).replace('  , ', ' ').replace(' ,  ', ' '),
                         textPosition: 'specific',
                         strokeColor: style.cross.color,
-                        lineWidth: style.cross.width,
+                        lineWidth: crossWidth,
                         lineType: style.cross.type
                     };
                     if (this.component.grid.getXend() - x > 100) {          // 右侧有空间
@@ -1181,14 +1282,14 @@ define(function (require) {
                     this._axisShadowShape.invisible = false;
                     this.zr.modShape(this._axisShadowShape.id);
                 }
-                this.zr.refresh();
+                this.zr.refreshNextFrame();
             }
         },
 
         __onmousemove: function (param) {
             clearTimeout(this._hidingTicket);
             clearTimeout(this._showingTicket);
-            if (this._mousein) {
+            if (this._mousein && this._enterable) {
                 return;
             }
             var target = param.target;
@@ -1284,7 +1385,9 @@ define(function (require) {
                     this.shapeList.length = 2;
                 }
                 for (var i = 0, l = tipShape.length; i < l; i++) {
-                    tipShape[i].zlevel = this._zlevelBase;
+                    tipShape[i].zlevel = this.getZlevelBase();
+                    tipShape[i].z = this.getZBase();
+                    
                     tipShape[i].style = zrShapeBase.prototype.getHighlightStyle(
                         tipShape[i].style,
                         tipShape[i].highlightStyle
@@ -1380,44 +1483,6 @@ define(function (require) {
                     case ecConfig.CHART_TYPE_LINE :
                     case ecConfig.CHART_TYPE_BAR :
                     case ecConfig.CHART_TYPE_K :
-                        if (this.component.xAxis == null 
-                            || this.component.yAxis == null
-                            || serie.data.length <= dataIndex
-                        ) {
-                            return;
-                        }
-                        var xAxisIndex = serie.xAxisIndex || 0;
-                        var yAxisIndex = serie.yAxisIndex || 0;
-                        if (this.component.xAxis.getAxis(xAxisIndex).type 
-                            === ecConfig.COMPONENT_TYPE_AXIS_CATEGORY
-                        ) {
-                            // 横轴是类目
-                            this._event = {
-                                zrenderX: this.component.xAxis.getAxis(xAxisIndex)
-                                          .getCoordByIndex(dataIndex),
-                                zrenderY: this.component.grid.getY() 
-                                          + (this.component.grid.getYend() 
-                                             - this.component.grid.getY()
-                                            ) / 4
-                            };
-                        }
-                        else {
-                            // 纵轴是类目
-                            this._event = {
-                                zrenderX: this.component.grid.getX() 
-                                          + (this.component.grid.getXend() 
-                                              - this.component.grid.getX()
-                                            ) / 4,
-                                zrenderY: this.component.yAxis.getAxis(yAxisIndex)
-                                           .getCoordByIndex(dataIndex)
-                            };
-                        }
-                        this._showAxisTrigger(
-                            xAxisIndex, 
-                            yAxisIndex,
-                            dataIndex
-                        );
-                        break;
                     case ecConfig.CHART_TYPE_RADAR :
                         if (this.component.polar == null 
                             || serie.data[0].value.length <= dataIndex
@@ -1448,10 +1513,12 @@ define(function (require) {
                     case ecConfig.CHART_TYPE_LINE :
                     case ecConfig.CHART_TYPE_BAR :
                     case ecConfig.CHART_TYPE_K :
+                    case ecConfig.CHART_TYPE_TREEMAP :
                     case ecConfig.CHART_TYPE_SCATTER :
                         var dataIndex = params.dataIndex;
                         for (var i = 0, l = shapeList.length; i < l; i++) {
-                            if (ecData.get(shapeList[i], 'seriesIndex') == seriesIndex
+                            if (shapeList[i]._mark == null
+                                && ecData.get(shapeList[i], 'seriesIndex') == seriesIndex
                                 && ecData.get(shapeList[i], 'dataIndex') == dataIndex
                             ) {
                                 this._curTarget = shapeList[i];
@@ -1588,18 +1655,18 @@ define(function (require) {
             this._lastTipShape = false;
             this.shapeList.length = 2;
             
+            this._lastDataIndex = -1;
+            this._lastSeriesIndex = -1;
+            this._lastItemTriggerId = -1;
+            
             if (newOption) {
                 this.option = newOption;
                 this.option.tooltip = this.reformOption(this.option.tooltip);
+                
                 this.option.tooltip.textStyle = zrUtil.merge(
                     this.option.tooltip.textStyle,
                     this.ecTheme.textStyle
                 );
-                // 补全padding属性
-                this.option.tooltip.padding = this.reformCssArray(
-                    this.option.tooltip.padding
-                );
-    
                 this._needAxisTrigger = false;
                 if (this.option.tooltip.trigger === 'axis') {
                     this._needAxisTrigger = true;
@@ -1620,6 +1687,11 @@ define(function (require) {
                 
                 this._setSelectedMap();
                 this._axisLineWidth = this.option.tooltip.axisPointer.lineStyle.width;
+                this._enterable = this.option.tooltip.enterable;
+
+                if (! this._enterable && this._tDom.className.indexOf(zrConfig.elementClassName) < 0) {
+                    this._tDom.className += ' ' + zrConfig.elementClassName;
+                }
             }
             if (this.showing) {
                 var self = this;
@@ -1641,7 +1713,7 @@ define(function (require) {
             this.zr.un(zrConfig.EVENT.MOUSEMOVE, this._onmousemove);
             this.zr.un(zrConfig.EVENT.GLOBALOUT, this._onglobalout);
             
-            if (this.hasAppend) {
+            if (this.hasAppend && !!this.dom.firstChild) {
                 this.dom.firstChild.removeChild(this._tDom);
             }
             this._tDom = null;

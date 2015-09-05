@@ -1,7 +1,8 @@
 /**
- * 图数据结构
+ * Graph data structure
+ * 
  * @module echarts/data/Graph
- * @author pissang(http://www.github.com/pissang)
+ * @author Yi Shen(https://www.github.com/pissang)
  */
 define(function(require) {
 
@@ -38,7 +39,7 @@ define(function(require) {
      */
     Graph.prototype.isDirected = function () {
         return this._directed;
-    }
+    };
 
     /**
      * 添加一个新的节点
@@ -143,12 +144,12 @@ define(function(require) {
         }
 
         if (this._directed) {
+            return this._edgesMap[n1 + '-' + n2];
+        } else {
             return this._edgesMap[n1 + '-' + n2]
                 || this._edgesMap[n2 + '-' + n1];
-        } else {
-            return this._edgesMap[n1 + '-' + n2];
         }
-    }
+    };
 
     /**
      * 移除节点（及其邻接边）
@@ -176,13 +177,50 @@ define(function(require) {
     };
 
     /**
+     * 遍历并且过滤指定的节点
+     * @param  {Function} cb
+     * @param  {*}   [context]
+     */
+     Graph.prototype.filterNode = function (cb, context) {
+        var len = this.nodes.length;
+        for (var i = 0; i < len;) {
+            if (cb.call(context, this.nodes[i], i)) {
+                i++;
+            } else {
+                this.removeNode(this.nodes[i]);
+                len--;
+            }
+        }
+     };
+
+    /**
+     * 遍历并且过滤指定的边
+     * @param  {Function} cb
+     * @param  {*}   [context]
+     */
+     Graph.prototype.filterEdge = function (cb, context) {
+        var len = this.edges.length;
+        for (var i = 0; i < len;) {
+            if (cb.call(context, this.edges[i], i)) {
+                i++;
+            } else {
+                this.removeEdge(this.edges[i]);
+                len--;
+            }
+        }
+     };
+
+    /**
      * 线性遍历所有节点
      * @param  {Function} cb
      * @param  {*}   [context]
      */
     Graph.prototype.eachNode = function (cb, context) {
-        for (var i = 0; i < this.nodes.length; i++) {
-            cb.call(context, this.nodes[i], i);
+        var len = this.nodes.length;
+        for (var i = 0; i < len; i++) {
+            if (this.nodes[i]) {    // 可能在遍历过程中存在节点删除
+                cb.call(context, this.nodes[i], i);
+            }
         }
     };
     
@@ -192,8 +230,11 @@ define(function(require) {
      * @param  {*}   [context]
      */
     Graph.prototype.eachEdge = function (cb, context) {
-        for (var i = 0; i < this.edges.length; i++) {
-            cb.call(context, this.edges[i], i);
+        var len = this.edges.length;
+        for (var i = 0; i < len; i++) {
+            if (this.edges[i]) {    // 可能在遍历过程中存在边删除
+                cb.call(context, this.edges[i], i);
+            }
         }
     };
     
@@ -274,7 +315,7 @@ define(function(require) {
             graph.addEdge(e.node1.id, e.node2.id, e.data);
         }
         return graph;
-    }
+    };
 
     /**
      * 图节点
@@ -378,7 +419,6 @@ define(function(require) {
      * 对于有向图会计算每一行的和写到`node.data.outValue`,
      * 计算每一列的和写到`node.data.inValue`。
      * 边的权重会被然后写到`edge.data.weight`。
-     * 如果是有向图被写到`edge.data.sourceWeight`和`edge.data.targetWeight`
      * 
      * @method module:echarts/data/Graph.fromMatrix
      * @param {Array.<Object>} nodesData 节点信息，必须有`id`属性, 会保存到`node.data`中
@@ -429,21 +469,17 @@ define(function(require) {
                 var n1 = graph.nodes[i];
                 var n2 = graph.nodes[j];
                 var edge = graph.addEdge(n1, n2, {});
-                if (directed) {
-                    edge.data.sourceWeight = item;
-                    edge.data.targetWeight = matrix[j][i];
-                }
                 edge.data.weight = item;
                 if (i !== j) {
-                    if (directed) {
+                    if (directed && matrix[j][i]) {
                         var inEdge = graph.addEdge(n2, n1, {});
-                        inEdge.data.sourceWeight = matrix[j][i];
-                        inEdge.data.targetWeight = item;
+                        inEdge.data.weight = matrix[j][i];
                     }
-                    edge.data.weight += matrix[j][i];
                 }
             }
         }
+
+        // console.log(graph.edges.map(function (e) {return e.node1.id + '-' + e.node2.id;}))
 
         return graph;
     };
